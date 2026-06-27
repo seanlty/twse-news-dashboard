@@ -46,6 +46,9 @@ MODE_LATEST = "latest"
 MODE_PREVIOUS = "previous"
 MODE_RECENT_FINANCIAL = "recent-financial"
 MODE_CHOICES = (MODE_LATEST, MODE_PREVIOUS, MODE_RECENT_FINANCIAL)
+TAB_MATERIAL_INFO = "material-info"
+TAB_MONTHLY_REVENUE = "monthly-revenue"
+TAB_CHOICES = (TAB_MATERIAL_INFO, TAB_MONTHLY_REVENUE)
 LISTED_OTC_MARKETS = {"sii", "otc"}
 MARKET_CLOSE_TIME = datetime_time(13, 30)
 MARKET_CLOSE_TIME_TEXT = "13:30:00"
@@ -268,6 +271,88 @@ def render_news_cards(records: list[dict[str, Any]]) -> str:
     return "\n".join(rows) or render_empty_state()
 
 
+def render_dashboard_tabs(active_tab: str) -> str:
+    """Render top-level dashboard tabs without changing data-source mode."""
+    tab_items = (
+        (TAB_MATERIAL_INFO, "重大訊息"),
+        (TAB_MONTHLY_REVENUE, "月營收"),
+    )
+    links = []
+    for tab, label in tab_items:
+        params = {"tab": tab}
+        if tab == TAB_MATERIAL_INFO:
+            params.update(
+                {
+                    "mode": MODE_RECENT_FINANCIAL,
+                    "category": CATEGORY_FINANCIAL_SELF_REPORT,
+                }
+            )
+        class_name = "tab-link is-active" if tab == active_tab else "tab-link"
+        aria_current = ' aria-current="page"' if tab == active_tab else ""
+        links.append(
+            f'<a class="{class_name}" href="/?{html.escape(urlencode(params))}"'
+            f'{aria_current}>{html.escape(label)}</a>'
+        )
+    return f'<nav class="tab-switcher" aria-label="Dashboard tabs">{"".join(links)}</nav>'
+
+
+def render_material_info_searchbar(search_query: str) -> str:
+    clear_params = urlencode(
+        {
+            "tab": TAB_MATERIAL_INFO,
+            "mode": MODE_RECENT_FINANCIAL,
+            "category": CATEGORY_FINANCIAL_SELF_REPORT,
+        }
+    )
+    return f"""
+    <form class="searchbar" method="get" action="/">
+      <input type="hidden" name="tab" value="{TAB_MATERIAL_INFO}">
+      <input type="hidden" name="mode" value="{MODE_RECENT_FINANCIAL}">
+      <input type="hidden" name="category" value="{CATEGORY_FINANCIAL_SELF_REPORT}">
+      <input type="search" name="q" value="{html.escape(search_query)}" placeholder="輸入股票代號">
+      <button type="submit">搜尋</button>
+      <a href="/?{html.escape(clear_params)}">清除</a>
+    </form>
+    """
+
+
+def render_monthly_revenue_placeholder() -> str:
+    return """
+    <section class="monthly-placeholder" aria-label="月營收">
+      <p>月營收資料抓取功能待補</p>
+    </section>
+    """
+
+
+def render_tabbed_dashboard(
+    records: list[dict[str, Any]],
+    active_tab: str,
+    recent_days: int,
+) -> str:
+    active_tab = active_tab if active_tab in TAB_CHOICES else TAB_MATERIAL_INFO
+    if active_tab == TAB_MONTHLY_REVENUE:
+        title = "月營收"
+        subtitle = "最新即時月營收公布"
+        content = render_monthly_revenue_placeholder()
+    else:
+        title = "重大訊息"
+        subtitle = f"近 {recent_days} 日財報自結 EPS（{len(records)} 筆）"
+        content = render_eps_table(records, recent_days)
+
+    return f"""
+    <section class="dashboard-panel">
+      <div class="dashboard-panel-header">
+        <div class="panel-heading">
+          <h2>{html.escape(title)}</h2>
+          <p>{html.escape(subtitle)}</p>
+        </div>
+        {render_dashboard_tabs(active_tab)}
+      </div>
+      {content}
+    </section>
+    """
+
+
 def render_eps_table(records: list[dict[str, Any]], recent_days: int) -> str:
     """Render a compact EPS table for recent self-reported financial records."""
     if not records:
@@ -374,14 +459,15 @@ def render_dashboard(
     category: str,
     search_query: str,
     recent_days: int = DEFAULT_RECENT_DAYS,
+    active_tab: str = TAB_MATERIAL_INFO,
 ) -> str:
     """Render a minimal HTML dashboard."""
-    body = render_eps_table(records, recent_days)
-    clear_params = urlencode(
-        {
-            "mode": MODE_RECENT_FINANCIAL,
-            "category": CATEGORY_FINANCIAL_SELF_REPORT,
-        }
+    active_tab = active_tab if active_tab in TAB_CHOICES else TAB_MATERIAL_INFO
+    body = render_tabbed_dashboard(records, active_tab, recent_days)
+    searchbar = (
+        render_material_info_searchbar(search_query)
+        if active_tab == TAB_MATERIAL_INFO
+        else ""
     )
     return f"""<!doctype html>
 <html lang="zh-Hant">
@@ -490,6 +576,61 @@ def render_dashboard(
       border: 1px solid #334155;
       color: var(--muted);
       background: var(--panel-2);
+    }}
+    .dashboard-panel {{
+      min-width: 0;
+    }}
+    .dashboard-panel-header {{
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 16px;
+      margin-top: 2px;
+    }}
+    .panel-heading h2 {{
+      margin: 0;
+      color: #f3f6fb;
+      font-size: 18px;
+      line-height: 1.3;
+      letter-spacing: 0;
+    }}
+    .panel-heading p {{
+      margin: 5px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }}
+    .tab-switcher {{
+      display: inline-flex;
+      flex: 0 0 auto;
+      gap: 2px;
+      padding: 3px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--panel-3);
+    }}
+    .tab-link {{
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 32px;
+      padding: 6px 12px;
+      border: 1px solid transparent;
+      border-radius: 4px;
+      color: #a6b2c3;
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: 800;
+      white-space: nowrap;
+    }}
+    .tab-link:hover {{
+      color: #ffffff;
+      border-color: #334155;
+      background: #171b29;
+    }}
+    .tab-link.is-active {{
+      color: #06111f;
+      border-color: #7bb7ff;
+      background: #7bb7ff;
     }}
     .news-list {{
       display: flex;
@@ -741,6 +882,18 @@ def render_dashboard(
       border: 1px solid var(--line);
       border-radius: 8px;
     }}
+    .monthly-placeholder {{
+      margin-top: 18px;
+      padding: 24px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }}
+    .monthly-placeholder p {{
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+    }}
     @media (max-width: 900px) {{
       .eps-table-wrap {{
         overflow-x: visible;
@@ -859,6 +1012,16 @@ def render_dashboard(
       .searchbar input[type="search"] {{
         width: 100%;
       }}
+      .dashboard-panel-header {{
+        align-items: stretch;
+        flex-direction: column;
+      }}
+      .tab-switcher {{
+        width: 100%;
+      }}
+      .tab-link {{
+        flex: 1 1 0;
+      }}
       dl {{
         grid-template-columns: 1fr;
       }}
@@ -880,13 +1043,7 @@ def render_dashboard(
         <p class="meta">資料來源：{html.escape(source)} ｜ 產生時間：{html.escape(generated_at)}</p>
       </div>
     </section>
-    <form class="searchbar" method="get" action="/">
-      <input type="hidden" name="mode" value="{MODE_RECENT_FINANCIAL}">
-      <input type="hidden" name="category" value="{CATEGORY_FINANCIAL_SELF_REPORT}">
-      <input type="search" name="q" value="{html.escape(search_query)}" placeholder="輸入股票代號">
-      <button type="submit">搜尋</button>
-      <a href="/?{html.escape(clear_params)}">清除</a>
-    </form>
+    {searchbar}
     <section class="news-list">{body}</section>
   </main>
   <script>
@@ -1109,6 +1266,9 @@ def build_handler(dashboard: DashboardServer) -> type[BaseHTTPRequestHandler]:
             path = parsed_url.path
             query_values = parse_qs(parsed_url.query)
             query = {key: values[0] for key, values in query_values.items() if values}
+            active_tab = query.get("tab", TAB_MATERIAL_INFO)
+            if active_tab not in TAB_CHOICES:
+                active_tab = TAB_MATERIAL_INFO
             mode = query.get("mode", dashboard.mode)
             if mode not in MODE_CHOICES:
                 mode = dashboard.mode
@@ -1152,18 +1312,22 @@ def build_handler(dashboard: DashboardServer) -> type[BaseHTTPRequestHandler]:
                 mode = MODE_RECENT_FINANCIAL
                 category = CATEGORY_FINANCIAL_SELF_REPORT
 
-            try:
-                records, source = dashboard.get_records(
-                    mode=mode,
-                    category=category,
-                    search_query=search_query,
-                )
-            except Exception as exc:  # pragma: no cover - exercised manually.
-                self.send_response(502)
-                self.send_header("Content-Type", "text/plain; charset=utf-8")
-                self.end_headers()
-                self.wfile.write(f"Failed to load dashboard data: {exc}".encode("utf-8"))
-                return
+            if path in {"/", "/index.html"} and active_tab == TAB_MONTHLY_REVENUE:
+                records = []
+                source = "月營收資料尚未接入"
+            else:
+                try:
+                    records, source = dashboard.get_records(
+                        mode=mode,
+                        category=category,
+                        search_query=search_query,
+                    )
+                except Exception as exc:  # pragma: no cover - exercised manually.
+                    self.send_response(502)
+                    self.send_header("Content-Type", "text/plain; charset=utf-8")
+                    self.end_headers()
+                    self.wfile.write(f"Failed to load dashboard data: {exc}".encode("utf-8"))
+                    return
 
             if path == "/api/news":
                 self._send_json(records)
@@ -1180,6 +1344,7 @@ def build_handler(dashboard: DashboardServer) -> type[BaseHTTPRequestHandler]:
                         category=category,
                         search_query=search_query,
                         recent_days=dashboard.recent_days,
+                        active_tab=active_tab,
                     )
                 )
                 return
