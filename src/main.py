@@ -10,7 +10,7 @@ import time
 from datetime import date, datetime, time as datetime_time, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 from urllib.parse import parse_qs, urlencode, urlparse
 
 from dotenv import load_dotenv
@@ -51,7 +51,60 @@ MARKET_CLOSE_TIME = datetime_time(13, 30)
 MARKET_CLOSE_TIME_TEXT = "13:30:00"
 UPDATE_API_PATH = "/api/admin/update"
 UPDATE_TOKEN_ENV = "TWSE_DASHBOARD_UPDATE_TOKEN"
+DEV_ALLOW_UNPROTECTED_UPDATE_ENV = "TWSE_DASHBOARD_DEV_ALLOW_UNPROTECTED_UPDATE"
+RANGE_CACHE_FILE_ENV = "TWSE_DASHBOARD_RANGE_CACHE_FILE"
+RECENT_DAYS_ENV = "TWSE_DASHBOARD_RECENT_DAYS"
+UPDATE_MIN_INTERVAL_ENV = "TWSE_DASHBOARD_UPDATE_MIN_INTERVAL"
 DEFAULT_UPDATE_MIN_INTERVAL_SECONDS = 300
+TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
+
+
+def env_bool(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().casefold() in TRUE_ENV_VALUES
+
+
+def env_int(name: str, default: int) -> int:
+    value = os.environ.get(name)
+    if value is None or not value.strip():
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
+def env_path(name: str) -> Path | None:
+    value = os.environ.get(name)
+    if value is None or not value.strip():
+        return None
+    return Path(value)
+
+
+def is_local_client(client_host: str) -> bool:
+    return client_host in {"127.0.0.1", "::1", "localhost"}
+
+
+def is_update_request_authorized(
+    headers: Mapping[str, str],
+    query: dict[str, str],
+    client_host: str,
+    allow_unprotected_local_update: bool = False,
+) -> bool:
+    expected_token = os.environ.get(UPDATE_TOKEN_ENV, "").strip()
+    if not expected_token:
+        return allow_unprotected_local_update and is_local_client(client_host)
+
+    auth_header = headers.get("Authorization", "").strip()
+    header_token = headers.get("X-Update-Token", "").strip()
+    query_token = query.get("token", "").strip()
+    bearer_token = ""
+    if auth_header.casefold().startswith("bearer "):
+        bearer_token = auth_header[7:].strip()
+
+    return expected_token in {bearer_token, header_token, query_token}
 
 
 def render_empty_state(message: str = "目前沒有抓到重大訊息。") -> str:
@@ -911,6 +964,7 @@ class DashboardServer:
         target_date: str | None = None,
         offline_file: Path | None = None,
         update_min_interval_seconds: int = DEFAULT_UPDATE_MIN_INTERVAL_SECONDS,
+        allow_unprotected_local_update: bool = False,
     ) -> None:
         self.crawler = crawler
         self.max_items = max_items
@@ -924,6 +978,7 @@ class DashboardServer:
         self.target_date = target_date
         self.offline_file = offline_file
         self.update_min_interval_seconds = update_min_interval_seconds
+        self.allow_unprotected_local_update = allow_unprotected_local_update
         self.last_update_at = 0.0
         self.last_update_result: dict[str, Any] | None = None
         self.cache_records: dict[str, list[dict[str, Any]]] = {}
@@ -1135,19 +1190,13 @@ def build_handler(dashboard: DashboardServer) -> type[BaseHTTPRequestHandler]:
             return
 
         def _is_update_authorized(self, query: dict[str, str]) -> bool:
-            expected_token = os.environ.get(UPDATE_TOKEN_ENV, "").strip()
-            if not expected_token:
-                client_host = self.client_address[0] if self.client_address else ""
-                return client_host in {"127.0.0.1", "::1"}
-
-            auth_header = self.headers.get("Authorization", "").strip()
-            header_token = self.headers.get("X-Update-Token", "").strip()
-            query_token = query.get("token", "").strip()
-            bearer_token = ""
-            if auth_header.casefold().startswith("bearer "):
-                bearer_token = auth_header[7:].strip()
-
-            return expected_token in {bearer_token, header_token, query_token}
+            client_host = self.client_address[0] if self.client_address else ""
+            return is_update_request_authorized(
+                headers=self.headers,
+                query=query,
+                client_host=client_host,
+                allow_unprotected_local_update=dashboard.allow_unprotected_local_update,
+            )
 
         def _send_html(self, content: str) -> None:
             payload = content.encode("utf-8")
@@ -1250,6 +1299,7 @@ def serve_command(args: argparse.Namespace) -> None:
         target_date=args.date,
         offline_file=args.offline_file,
         update_min_interval_seconds=args.update_min_interval,
+        allow_unprotected_local_update=args.allow_unprotected_local_update,
     )
     server = ThreadingHTTPServer((args.host, args.port), build_handler(dashboard))
     print(f"Serving dashboard at http://{args.host}:{args.port}")
@@ -1315,16 +1365,22 @@ def build_parser() -> argparse.ArgumentParser:
     enrich_cache.set_defaults(func=enrich_cache_command)
 
     serve = subparsers.add_parser("serve", help="Run the local demo dashboard")
-    serve.add_argument("--host", default="127.0.0.1")
-    serve.add_argument("--port", type=int, default=8000)
+    serve.add_argument("--host", default=os.environ.get("HOST", "127.0.0.1"))
+    serve.add_argument("--port", type=int, default=env_int("PORT", 8000))
     serve.add_argument("--mode", default=MODE_RECENT_FINANCIAL, choices=MODE_CHOICES)
     serve.add_argument("--category", default=CATEGORY_FINANCIAL_SELF_REPORT, choices=CATEGORY_CHOICES)
-    serve.add_argument("--recent-days", type=int, default=DEFAULT_RECENT_DAYS)
-    serve.add_argument("--range-cache-file", type=Path)
+    serve.add_argument("--recent-days", type=int, default=env_int(RECENT_DAYS_ENV, DEFAULT_RECENT_DAYS))
+    serve.add_argument("--range-cache-file", type=Path, default=env_path(RANGE_CACHE_FILE_ENV))
     serve.add_argument("--date", help="Target date for previous mode, e.g. 2026-06-26")
     serve.add_argument("--max-items", type=int, default=0)
     serve.add_argument("--refresh-seconds", type=int, default=DEFAULT_REFRESH_SECONDS)
-    serve.add_argument("--update-min-interval", type=int, default=DEFAULT_UPDATE_MIN_INTERVAL_SECONDS)
+    serve.add_argument("--update-min-interval", type=int, default=env_int(UPDATE_MIN_INTERVAL_ENV, DEFAULT_UPDATE_MIN_INTERVAL_SECONDS))
+    serve.add_argument(
+        "--allow-unprotected-local-update",
+        action="store_true",
+        default=env_bool(DEV_ALLOW_UNPROTECTED_UPDATE_ENV, False),
+        help="Development only: allow localhost update calls when TWSE_DASHBOARD_UPDATE_TOKEN is unset",
+    )
     serve.add_argument("--request-interval", type=float, default=DEFAULT_REQUEST_INTERVAL_SECONDS)
     serve.add_argument("--output", type=Path, default=DEFAULT_OUTPUT_PATH)
     serve.add_argument("--previous-output", type=Path, default=DEFAULT_PREVIOUS_OUTPUT_PATH)
@@ -1335,6 +1391,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    bootstrap_parser = argparse.ArgumentParser(add_help=False)
+    bootstrap_parser.add_argument("--env-file", default=PROJECT_ROOT / ".env", type=Path)
+    bootstrap_args, _ = bootstrap_parser.parse_known_args()
+    load_dotenv(bootstrap_args.env_file, override=False)
+
     parser = build_parser()
     args = parser.parse_args()
     load_dotenv(args.env_file, override=False)

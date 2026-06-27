@@ -8,7 +8,9 @@ from main import (  # noqa: E402
     DEFAULT_OUTPUT_PATH,
     DEFAULT_PREVIOUS_OUTPUT_PATH,
     MODE_RECENT_FINANCIAL,
+    UPDATE_TOKEN_ENV,
     DashboardServer,
+    is_update_request_authorized,
 )
 from mops_crawler import save_records  # noqa: E402
 
@@ -77,3 +79,39 @@ def test_update_latest_cache_merges_and_persists_eps_metrics(tmp_path: Path) -> 
     assert result["new_count"] == 1
     assert {record["company_id"] for record in records} == {"1435", "3163"}
     assert all(record["eps_metrics"]["has_eps"] for record in records)
+
+
+def test_update_request_requires_token_by_default(monkeypatch) -> None:
+    monkeypatch.delenv(UPDATE_TOKEN_ENV, raising=False)
+
+    assert is_update_request_authorized({}, {}, "127.0.0.1") is False
+    assert (
+        is_update_request_authorized(
+            {},
+            {},
+            "127.0.0.1",
+            allow_unprotected_local_update=True,
+        )
+        is True
+    )
+
+
+def test_update_request_accepts_bearer_token(monkeypatch) -> None:
+    monkeypatch.setenv(UPDATE_TOKEN_ENV, "secret-token")
+
+    assert (
+        is_update_request_authorized(
+            {"Authorization": "Bearer secret-token"},
+            {},
+            "203.0.113.1",
+        )
+        is True
+    )
+    assert (
+        is_update_request_authorized(
+            {"Authorization": "Bearer wrong-token"},
+            {},
+            "203.0.113.1",
+        )
+        is False
+    )
