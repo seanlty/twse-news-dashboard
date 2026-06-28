@@ -12,7 +12,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Mapping
 from urllib.parse import parse_qs, urlencode, urlparse
+from zoneinfo import ZoneInfo
 
+import requests
 from dotenv import load_dotenv
 
 from mops_crawler import (
@@ -36,11 +38,23 @@ from mops_crawler import (
     save_records,
     sort_records_by_spoke_time,
 )
+from monthly_revenue_crawler import (
+    MonthlyRevenueCrawler,
+    append_new_monthly_revenue_records,
+    data_month_parts,
+    dedupe_event_records,
+    filter_monthly_records_by_company_id,
+    normalize_data_month,
+    normalize_company_ids,
+    previous_month_parts,
+    sort_event_records,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT_PATH = PROJECT_ROOT / "data" / "raw" / "latest_material_info.json"
 DEFAULT_PREVIOUS_OUTPUT_PATH = PROJECT_ROOT / "data" / "raw" / "previous_material_info.json"
 DEFAULT_RANGE_OUTPUT_PATH = PROJECT_ROOT / "data" / "raw" / "material_info_range.json"
+DEFAULT_MONTHLY_REVENUE_OUTPUT_PATH = PROJECT_ROOT / "data" / "raw" / "monthly_revenue_latest.json"
 DEFAULT_RECENT_DAYS = 7
 MODE_LATEST = "latest"
 MODE_PREVIOUS = "previous"
@@ -48,18 +62,35 @@ MODE_RECENT_FINANCIAL = "recent-financial"
 MODE_CHOICES = (MODE_LATEST, MODE_PREVIOUS, MODE_RECENT_FINANCIAL)
 TAB_MATERIAL_INFO = "material-info"
 TAB_MONTHLY_REVENUE = "monthly-revenue"
-TAB_CHOICES = (TAB_MATERIAL_INFO, TAB_MONTHLY_REVENUE)
+TAB_FINANCIAL_REPORT = "financial-report"
+TAB_CHOICES = (TAB_MATERIAL_INFO, TAB_MONTHLY_REVENUE, TAB_FINANCIAL_REPORT)
+MONTHLY_REVENUE_SUMMARY_CACHE_KEY = f"{TAB_MONTHLY_REVENUE}:summary"
 LISTED_OTC_MARKETS = {"sii", "otc"}
+MONTHLY_REVENUE_PRIMARY_SOURCE_TYPES = {"mops_monthly_revenue_summary"}
+MONTHLY_REVENUE_FALLBACK_SOURCE_TYPES = {
+    "twse_openapi_monthly_revenue",
+    "tpex_openapi_monthly_revenue",
+}
 MARKET_CLOSE_TIME = datetime_time(13, 30)
 MARKET_CLOSE_TIME_TEXT = "13:30:00"
 UPDATE_API_PATH = "/api/admin/update"
+MONTHLY_REVENUE_UPDATE_API_PATH = "/api/admin/update-monthly-revenue"
 UPDATE_TOKEN_ENV = "TWSE_DASHBOARD_UPDATE_TOKEN"
 DEV_ALLOW_UNPROTECTED_UPDATE_ENV = "TWSE_DASHBOARD_DEV_ALLOW_UNPROTECTED_UPDATE"
 RANGE_CACHE_FILE_ENV = "TWSE_DASHBOARD_RANGE_CACHE_FILE"
 RECENT_DAYS_ENV = "TWSE_DASHBOARD_RECENT_DAYS"
 UPDATE_MIN_INTERVAL_ENV = "TWSE_DASHBOARD_UPDATE_MIN_INTERVAL"
+MONTHLY_REVENUE_COMPANY_IDS_ENV = "TWSE_DASHBOARD_MONTHLY_REVENUE_COMPANY_IDS"
+MONTHLY_REVENUE_CACHE_FILE_ENV = "TWSE_DASHBOARD_MONTHLY_REVENUE_CACHE_FILE"
+FINMIND_TOKEN_ENV_NAMES = ("FINMIND_TOKEN", "FINMIND_API_TOKEN")
+FINMIND_DATA_API_URL = "https://api.finmindtrade.com/api/v4/data"
+FINMIND_TRADING_DATE_DATASET = "TaiwanStockTradingDate"
+TRADING_DATE_LOOKBACK_DAYS = 21
+TRADING_DATE_CACHE_TTL_SECONDS = 3600
+TAIWAN_TZ = ZoneInfo("Asia/Taipei")
 DEFAULT_UPDATE_MIN_INTERVAL_SECONDS = 300
 TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
+_TRADING_DATE_CACHE: dict[str, Any] = {"key": "", "fetched_at": 0.0, "dates": []}
 
 
 def env_bool(name: str, default: bool = False) -> bool:
@@ -84,6 +115,18 @@ def env_path(name: str) -> Path | None:
     if value is None or not value.strip():
         return None
     return Path(value)
+
+
+def env_first(names: tuple[str, ...]) -> str:
+    for name in names:
+        value = os.environ.get(name)
+        if value and value.strip():
+            return value.strip()
+    return ""
+
+
+def taiwan_now() -> datetime:
+    return datetime.now(TAIWAN_TZ)
 
 
 def is_local_client(client_host: str) -> bool:
@@ -123,9 +166,88 @@ def metric_float(value: Any) -> float | None:
     if value in (None, ""):
         return None
     try:
-        return float(str(value))
+        return float(str(value).replace(",", "").replace("%", "").strip())
     except ValueError:
         return None
+
+
+def format_number(value: float, digits: int = 1) -> str:
+    return f"{value:,.{digits}f}"
+
+
+def render_money_millions(value: Any) -> str:
+    amount = metric_float(value)
+    if amount is None:
+        return '<span class="muted-value">-</span>'
+    return f'<span class="money-value">{html.escape(format_number(amount / 1000, 1))}</span>'
+
+
+def render_percent_value(value: Any) -> str:
+    percent = metric_float(value)
+    if percent is None:
+        return '<span class="muted-value">-</span>'
+    class_name = "finance-up" if percent > 0 else "finance-down" if percent < 0 else "muted-value"
+    return f'<span class="{class_name}">{percent:.2f}%</span>'
+
+
+def record_text(record: dict[str, Any]) -> str:
+    detail = record.get("detail") or record.get("detail_preview") or {}
+    pieces = [
+        record.get("event_type", ""),
+        record.get("source_label", ""),
+        record.get("title", ""),
+        record.get("subject", ""),
+        detail.get("description", ""),
+    ]
+    return " ".join(str(piece) for piece in pieces if piece)
+
+
+def is_financial_report_record(record: dict[str, Any]) -> bool:
+    text = record_text(record)
+    return (
+        str(record.get("event_type", "")) == "financial_report"
+        or str(record.get("source_label", "")) in {"財務報告", "財務訊號"}
+        or "財務報告" in text
+    )
+
+
+def is_monthly_revenue_record(record: dict[str, Any]) -> bool:
+    if is_financial_report_record(record):
+        return False
+    event_type = str(record.get("event_type", ""))
+    if event_type in {"monthly_revenue", "material_revenue"}:
+        return True
+    return "營收" in record_text(record)
+
+
+def monthly_revenue_identity_key(record: dict[str, Any]) -> tuple[str, str, str]:
+    return (
+        str(record.get("market", "")),
+        str(record.get("company_id", "")),
+        normalize_data_month(record.get("data_month", "")),
+    )
+
+
+def filter_monthly_revenue_fallback_duplicates(
+    existing_records: list[dict[str, Any]],
+    latest_records: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int]:
+    existing_primary_keys = {
+        monthly_revenue_identity_key(record)
+        for record in existing_records
+        if record.get("source_type") in MONTHLY_REVENUE_PRIMARY_SOURCE_TYPES
+    }
+    filtered_records: list[dict[str, Any]] = []
+    skipped_count = 0
+    for record in latest_records:
+        if (
+            record.get("source_type") in MONTHLY_REVENUE_FALLBACK_SOURCE_TYPES
+            and monthly_revenue_identity_key(record) in existing_primary_keys
+        ):
+            skipped_count += 1
+            continue
+        filtered_records.append(record)
+    return filtered_records, skipped_count
 
 
 def render_eps_delta(metrics: dict[str, Any]) -> str:
@@ -151,6 +273,126 @@ def format_table_time(record: dict[str, Any]) -> str:
     return f"{date_part} {time_text[:5]}".strip()
 
 
+def parse_event_datetime(record: dict[str, Any]) -> datetime | None:
+    spoke_date = str(record.get("spoke_date", "")).strip()
+    if spoke_date:
+        spoke_time = normalize_time(str(record.get("spoke_time", ""))) or "00:00:00"
+        try:
+            return datetime.fromisoformat(f"{spoke_date}T{spoke_time}")
+        except ValueError:
+            pass
+
+    for key in ("announced_at", "event_time", "detected_at", "fetched_at"):
+        value = str(record.get(key, "")).strip()
+        if not value:
+            continue
+        normalized = value.replace("Z", "+00:00")
+        try:
+            return datetime.fromisoformat(normalized)
+        except ValueError:
+            continue
+    return None
+
+
+def format_event_table_time(record: dict[str, Any]) -> str:
+    event_at = parse_event_datetime(record)
+    if event_at is not None:
+        return f"{event_at.month:02d}-{event_at.day:02d} {event_at.hour:02d}:{event_at.minute:02d}"
+    return display_event_time(record)
+
+
+def format_event_table_time_with_seconds(record: dict[str, Any]) -> str:
+    event_at = parse_event_datetime(record)
+    if event_at is not None:
+        return (
+            f"{event_at.month:02d}-{event_at.day:02d} "
+            f"{event_at.hour:02d}:{event_at.minute:02d}:{event_at.second:02d}"
+        )
+    return display_event_time(record)
+
+
+def monthly_revenue_period_key(record: dict[str, Any]) -> tuple[int, int] | None:
+    year, month = data_month_parts(record.get("data_month"))
+    if year is None or month is None:
+        return None
+    return year, month
+
+
+def format_monthly_revenue_period(value: Any) -> str:
+    year, month = data_month_parts(value)
+    if year is None or month is None:
+        return "-"
+    return f"{year + 1911}/{month:02d}"
+
+
+def filter_latest_monthly_revenue_period(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    keyed_records = [
+        (period_key, record)
+        for record in records
+        if (period_key := monthly_revenue_period_key(record)) is not None
+    ]
+    if not keyed_records:
+        return []
+    latest_period = max(period_key for period_key, _ in keyed_records)
+    return [record for period_key, record in keyed_records if period_key == latest_period]
+
+
+def dedupe_latest_monthly_revenue_by_company(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    selected: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for record in sort_event_records(records):
+        key = monthly_revenue_identity_key(record)
+        if key in seen:
+            continue
+        seen.add(key)
+        selected.append(record)
+    return selected
+
+
+def select_display_monthly_revenue_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    latest_period_records = filter_latest_monthly_revenue_period(records)
+    return dedupe_latest_monthly_revenue_by_company(latest_period_records)
+
+
+def monthly_revenue_company_count(records: list[dict[str, Any]]) -> int:
+    company_ids = {str(record.get("company_id", "")).strip() for record in records}
+    return len([company_id for company_id in company_ids if company_id])
+
+
+def latest_monthly_revenue_detected_record(records: list[dict[str, Any]]) -> dict[str, Any] | None:
+    candidates: list[tuple[float, dict[str, Any]]] = []
+    for record in records:
+        event_at = parse_event_datetime(
+            {
+                "detected_at": record.get("detected_at", ""),
+                "event_time": record.get("event_time", ""),
+                "announced_at": record.get("announced_at", ""),
+            }
+        )
+        if event_at is None:
+            continue
+        candidates.append((event_at.timestamp(), record))
+    if not candidates:
+        return None
+    return max(candidates, key=lambda item: item[0])[1]
+
+
+def render_monthly_revenue_panel_subtitle(records: list[dict[str, Any]]) -> str:
+    period = format_monthly_revenue_period(records[0].get("data_month")) if records else "-"
+    latest_record = latest_monthly_revenue_detected_record(records)
+    latest_text = (
+        format_event_table_time_with_seconds(latest_record)
+        if latest_record is not None
+        else "-"
+    )
+    return f"""
+    <div class="panel-subtitle monthly-summary-meta">
+      <div>營收期間：{html.escape(period)} | 已申報 {monthly_revenue_company_count(records)} 家</div>
+      <div>最新申報：{html.escape(latest_text)} · 偵測中 ✓</div>
+    </div>
+    """
+
+
 def format_month_day(value: date) -> str:
     return f"{value.month}/{value.day}"
 
@@ -165,10 +407,96 @@ def filter_records_by_listing_market(records: list[dict[str, Any]]) -> list[dict
 
 
 def parse_record_date(record: dict[str, Any]) -> date | None:
+    event_at = parse_event_datetime(record)
+    return event_at.date() if event_at is not None else None
+
+
+def finmind_api_token() -> str:
+    return env_first(FINMIND_TOKEN_ENV_NAMES)
+
+
+def parse_finmind_trading_date_row(row: Any) -> date | None:
+    if not isinstance(row, dict):
+        return None
+    raw_date = row.get("date") or row.get("Date") or row.get("日期")
+    if not raw_date:
+        return None
+
+    for key in ("is_trading_day", "isTradingDay", "trading_day", "is_open", "isOpen"):
+        if key not in row:
+            continue
+        value = row.get(key)
+        if isinstance(value, bool) and not value:
+            return None
+        if str(value).strip().casefold() in {"0", "false", "no", "n"}:
+            return None
+
     try:
-        return date.fromisoformat(str(record.get("spoke_date", "")))
+        return date.fromisoformat(str(raw_date)[:10])
     except ValueError:
         return None
+
+
+def fetch_finmind_trading_dates(
+    start_date: date,
+    end_date: date,
+    token: str | None = None,
+) -> list[date]:
+    auth_token = token if token is not None else finmind_api_token()
+    if not auth_token:
+        return []
+
+    response = requests.get(
+        FINMIND_DATA_API_URL,
+        params={
+            "dataset": FINMIND_TRADING_DATE_DATASET,
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
+            "token": auth_token,
+        },
+        timeout=10,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    rows = payload.get("data", []) if isinstance(payload, dict) else []
+    return sorted(
+        {
+            parsed
+            for row in rows
+            if (parsed := parse_finmind_trading_date_row(row)) is not None
+        }
+    )
+
+
+def get_recent_trading_dates(now: datetime | None = None) -> list[date]:
+    token = finmind_api_token()
+    if not token:
+        return []
+
+    current = now or taiwan_now()
+    end_date = current.date()
+    start_date = end_date - timedelta(days=TRADING_DATE_LOOKBACK_DAYS)
+    cache_key = f"{start_date.isoformat()}:{end_date.isoformat()}:token"
+    current_monotonic = time.monotonic()
+    if (
+        _TRADING_DATE_CACHE["key"] == cache_key
+        and current_monotonic - float(_TRADING_DATE_CACHE["fetched_at"]) < TRADING_DATE_CACHE_TTL_SECONDS
+    ):
+        return list(_TRADING_DATE_CACHE["dates"])
+
+    try:
+        trading_dates = fetch_finmind_trading_dates(start_date, end_date, token=token)
+    except Exception:
+        trading_dates = []
+
+    _TRADING_DATE_CACHE.update(
+        {
+            "key": cache_key,
+            "fetched_at": current_monotonic,
+            "dates": trading_dates,
+        }
+    )
+    return list(trading_dates)
 
 
 def previous_business_day(value: date) -> date:
@@ -178,36 +506,54 @@ def previous_business_day(value: date) -> date:
     return current
 
 
-def last_completed_market_close_date(now: datetime | None = None) -> date:
-    current = now or datetime.now()
-    if current.date().weekday() < 5 and current.time() >= MARKET_CLOSE_TIME:
-        return current.date()
-    return previous_business_day(current.date())
+def last_completed_market_close_date(
+    now: datetime | None = None,
+    trading_dates: list[date] | None = None,
+) -> date:
+    current = now or taiwan_now()
+    current_date = current.date()
+
+    if trading_dates:
+        valid_dates = sorted({trading_date for trading_date in trading_dates if trading_date <= current_date})
+        if current_date in valid_dates and current.time() >= MARKET_CLOSE_TIME:
+            return current_date
+        past_dates = [trading_date for trading_date in valid_dates if trading_date < current_date]
+        if past_dates:
+            return max(past_dates)
+
+    if current_date.weekday() < 5 and current.time() >= MARKET_CLOSE_TIME:
+        return current_date
+    return previous_business_day(current_date)
 
 
 def determine_cutoff_date(
     records: list[dict[str, Any]],
     now: datetime | None = None,
+    trading_dates: list[date] | None = None,
 ) -> date:
-    close_date = last_completed_market_close_date(now)
-    record_dates = sorted({parsed for record in records if (parsed := parse_record_date(record))})
-    if not record_dates:
-        return close_date
-
-    eligible_dates = [record_date for record_date in record_dates if record_date <= close_date]
-    return max(eligible_dates) if eligible_dates else max(record_dates)
+    _ = records
+    resolved_trading_dates = trading_dates
+    if resolved_trading_dates is None:
+        resolved_trading_dates = get_recent_trading_dates(now)
+    return last_completed_market_close_date(now, trading_dates=resolved_trading_dates)
 
 
 def is_market_unreacted_record(record: dict[str, Any], cutoff_date: date) -> bool:
-    record_date = parse_record_date(record)
-    record_time = normalize_time(str(record.get("spoke_time", "")))
-    return record_date == cutoff_date and record_time > MARKET_CLOSE_TIME_TEXT
+    event_at = parse_event_datetime(record)
+    if event_at is None:
+        return False
+    return (
+        event_at.date() == cutoff_date
+        and event_at.time().replace(tzinfo=None).strftime("%H:%M:%S") > MARKET_CLOSE_TIME_TEXT
+    )
 
 
 def split_records_by_market_reaction(
     records: list[dict[str, Any]],
+    now: datetime | None = None,
+    trading_dates: list[date] | None = None,
 ) -> tuple[date, list[dict[str, Any]], list[dict[str, Any]]]:
-    cutoff_date = determine_cutoff_date(records)
+    cutoff_date = determine_cutoff_date(records, now=now, trading_dates=trading_dates)
     market_unreacted = [
         record
         for record in records
@@ -274,8 +620,9 @@ def render_news_cards(records: list[dict[str, Any]]) -> str:
 def render_dashboard_tabs(active_tab: str) -> str:
     """Render top-level dashboard tabs without changing data-source mode."""
     tab_items = (
-        (TAB_MATERIAL_INFO, "重大訊息"),
+        (TAB_MATERIAL_INFO, "自結"),
         (TAB_MONTHLY_REVENUE, "月營收"),
+        (TAB_FINANCIAL_REPORT, "財報"),
     )
     links = []
     for tab, label in tab_items:
@@ -316,12 +663,271 @@ def render_material_info_searchbar(search_query: str) -> str:
     """
 
 
-def render_monthly_revenue_placeholder() -> str:
-    return """
-    <section class="monthly-placeholder" aria-label="月營收">
-      <p>月營收資料抓取功能待補</p>
-    </section>
+def render_monthly_revenue_searchbar(search_query: str, active_tab: str = TAB_MONTHLY_REVENUE) -> str:
+    active_tab = active_tab if active_tab in {TAB_MONTHLY_REVENUE, TAB_FINANCIAL_REPORT} else TAB_MONTHLY_REVENUE
+    clear_params = urlencode({"tab": active_tab})
+    return f"""
+    <form class="searchbar" method="get" action="/">
+      <input type="hidden" name="tab" value="{html.escape(active_tab)}">
+      <input type="search" name="q" value="{html.escape(search_query)}" placeholder="輸入股票代號">
+      <button type="submit">搜尋</button>
+      <a href="/?{html.escape(clear_params)}">清除</a>
+    </form>
     """
+
+
+def display_event_time(record: dict[str, Any]) -> str:
+    value = str(record.get("announced_at") or record.get("detected_at") or record.get("event_time") or "")
+    if not value:
+        return "-"
+    normalized = value.replace("T", " ")
+    if len(normalized) >= 16:
+        return normalized[:16]
+    return normalized
+
+
+def render_monthly_metric(record: dict[str, Any], key: str) -> str:
+    value = record.get(key)
+    if value in (None, ""):
+        metrics = record.get("metrics") or {}
+        value = metrics.get(key)
+    return render_metric(value)
+
+
+def render_source_badge(record: dict[str, Any]) -> str:
+    source_label = str(record.get("source_label") or record.get("source_type") or "")
+    return f'<span class="source-pill">{html.escape(source_label or "-")}</span>'
+
+
+def record_detail_description(record: dict[str, Any]) -> str:
+    detail = record.get("detail") or record.get("detail_preview") or {}
+    description = str(detail.get("description") or "")
+    fields = detail.get("fields") or record.get("fields") or {}
+    if description:
+        return description
+    if fields:
+        return "\n".join(f"{key}: {value}" for key, value in fields.items())
+    return str(record.get("title") or record.get("subject") or "")
+
+
+def record_field_value(record: dict[str, Any], *keys: str) -> str:
+    detail = record.get("detail") or {}
+    fields = detail.get("fields") or record.get("fields") or {}
+    for key in keys:
+        value = record.get(key)
+        if value not in (None, ""):
+            return str(value)
+        value = fields.get(key)
+        if value not in (None, ""):
+            return str(value)
+    return ""
+
+
+def monthly_mom_percent(record: dict[str, Any]) -> str:
+    existing_value = record_field_value(
+        record,
+        "mom_percent",
+        "MOM%",
+        "月增率",
+        "較上月增減百分比",
+        "上月比較增減百分比",
+    )
+    if existing_value:
+        return existing_value
+
+    current = metric_float(record.get("monthly_revenue"))
+    previous = metric_float(record.get("previous_month_revenue"))
+    if current is None or previous in (None, 0):
+        return ""
+    return f"{((current - previous) / abs(previous)) * 100:.2f}"
+
+
+def monthly_note(record: dict[str, Any]) -> str:
+    return record_field_value(
+        record,
+        "note",
+        "備註 / 營收變化原因說明",
+        "營收變化原因說明",
+        "備註",
+        "其他應敘明事項",
+    )
+
+
+def render_monthly_revenue_table(records: list[dict[str, Any]]) -> str:
+    if not records:
+        return render_empty_state("目前沒有月營收資料。")
+
+    cutoff_date, market_unreacted, historical = split_records_by_market_reaction(records)
+    sections = [
+        (
+            f"市場未反映（{format_month_day(cutoff_date)} 13:30 後公告）（{len(market_unreacted)} 筆）",
+            market_unreacted,
+        ),
+        (
+            f"歷史公告（{format_month_day(cutoff_date)} 13:30 前）（{len(historical)} 筆）",
+            historical,
+        ),
+    ]
+    rows: list[str] = []
+    for section_title, section_records in sections:
+        rows.append(
+            f"""
+            <tr class="eps-group-row">
+              <td colspan="8">{html.escape(section_title)}</td>
+            </tr>
+            """
+        )
+        if not section_records:
+            rows.append(
+                """
+                <tr class="eps-empty-row">
+                  <td colspan="8">目前沒有符合條件的公告。</td>
+                </tr>
+                """
+            )
+            continue
+
+        for record in section_records:
+            time_note = "公告" if record.get("announced_at") else "偵測"
+            note = monthly_note(record)
+            rows.append(
+                f"""
+                <tr class="eps-data-row">
+                  <td class="code-cell" data-label="代號">{html.escape(str(record.get("company_id", "")))}</td>
+                  <td class="name-cell" data-label="名稱">{html.escape(str(record.get("company_name", "")))}</td>
+                  <td class="time-cell" data-label="偵測時間">{html.escape(format_event_table_time(record))}<span class="time-note">{html.escape(time_note)}</span></td>
+                  <td class="metric-cell primary-metric" data-label="營收(M)">{render_money_millions(record_field_value(record, "monthly_revenue", "本月", "營業收入-當月營收"))}</td>
+                  <td data-label="MOM%">{render_percent_value(monthly_mom_percent(record))}</td>
+                  <td data-label="YOY%">{render_percent_value(record_field_value(record, "yoy_percent", "本月增減百分比", "營業收入-去年同月增減(%)"))}</td>
+                  <td data-label="累計YOY%">{render_percent_value(record_field_value(record, "ytd_yoy_percent", "累計增減百分比", "累計營業收入-前期比較增減(%)"))}</td>
+                  <td class="note-cell" data-label="備註">{html.escape(note) if note else '<span class="muted-value">-</span>'}</td>
+                </tr>
+                """
+            )
+
+    return f"""
+    <div class="eps-table-wrap">
+      <table class="eps-table monthly-table">
+        <thead>
+          <tr>
+            <th>代號</th>
+            <th>名稱</th>
+            <th>偵測時間</th>
+            <th>營收(M)</th>
+            <th>MOM%</th>
+            <th>YOY%</th>
+            <th>累計YOY%</th>
+            <th>備註</th>
+          </tr>
+        </thead>
+        <tbody>
+          {"".join(rows)}
+        </tbody>
+      </table>
+    </div>
+    """
+
+
+def financial_metric(record: dict[str, Any], key: str) -> Any:
+    metrics = record.get("metrics") or {}
+    value = metrics.get(key)
+    if value in (None, ""):
+        value = record.get(key)
+    return value
+
+
+def render_financial_report_table(records: list[dict[str, Any]]) -> str:
+    if not records:
+        return render_empty_state("目前沒有財報資料。")
+
+    cutoff_date, market_unreacted, historical = split_records_by_market_reaction(records)
+    sections = [
+        (
+            f"市場未反映（{format_month_day(cutoff_date)} 13:30 後公告）（{len(market_unreacted)} 筆）",
+            market_unreacted,
+        ),
+        (
+            f"歷史公告（{format_month_day(cutoff_date)} 13:30 前）（{len(historical)} 筆）",
+            historical,
+        ),
+    ]
+    rows: list[str] = []
+    detail_index = 0
+    for section_title, section_records in sections:
+        rows.append(
+            f"""
+            <tr class="eps-group-row">
+              <td colspan="10">{html.escape(section_title)}</td>
+            </tr>
+            """
+        )
+        if not section_records:
+            rows.append(
+                """
+                <tr class="eps-empty-row">
+                  <td colspan="10">目前沒有符合條件的公告。</td>
+                </tr>
+                """
+            )
+            continue
+
+        for record in section_records:
+            description = record_detail_description(record)
+            detail_id = f"financial-detail-panel-{detail_index}"
+            detail_index += 1
+            title = str(record.get("title") or record.get("subject") or "")
+            source_label = str(record.get("source_label") or "")
+            rows.append(
+                f"""
+                <tr class="eps-data-row" data-detail-target="{detail_id}" tabindex="0" aria-expanded="false">
+                  <td class="time-cell" data-label="時間">{html.escape(format_event_table_time(record))}</td>
+                  <td class="code-cell" data-label="代號">{html.escape(str(record.get("company_id", "")))}</td>
+                  <td class="name-cell" data-label="名稱">{html.escape(str(record.get("company_name", "")))}</td>
+                  <td class="metric-cell primary-metric" data-label="營收(M)">{render_money_millions(financial_metric(record, "operating_revenue"))}</td>
+                  <td class="metric-cell" data-label="毛利(M)">{render_money_millions(financial_metric(record, "gross_profit"))}</td>
+                  <td class="metric-cell" data-label="營益(M)">{render_money_millions(financial_metric(record, "operating_income"))}</td>
+                  <td class="metric-cell" data-label="稅前(M)">{render_money_millions(financial_metric(record, "pre_tax_income"))}</td>
+                  <td class="metric-cell" data-label="歸母(M)">{render_money_millions(financial_metric(record, "parent_net_income"))}</td>
+                  <td class="metric-cell" data-label="EPS">{render_metric(financial_metric(record, "eps"))}</td>
+                  <td class="detail-cell compact-detail-cell" data-label="原文">
+                    <button class="detail-toggle" type="button" aria-controls="{detail_id}" aria-expanded="false">詳細原文</button>
+                  </td>
+                </tr>
+                <tr class="eps-detail-panel-row" id="{detail_id}" hidden>
+                  <td colspan="10">
+                    <section class="detail-panel" aria-label="財報詳細原文">
+                      <div class="detail-subject">{html.escape(title)}</div>
+                      <div class="detail-meta-line">{html.escape(source_label or '-')} ｜ 時間：{html.escape(display_event_time(record))}</div>
+                      <pre>{html.escape(description)}</pre>
+                    </section>
+                  </td>
+                </tr>
+                """
+            )
+
+    return """
+    <div class="eps-table-wrap">
+      <table class="eps-table financial-table">
+        <thead>
+          <tr>
+            <th>時間</th>
+            <th>代號</th>
+            <th>名稱</th>
+            <th>營收(M)</th>
+            <th>毛利(M)</th>
+            <th>營益(M)</th>
+            <th>稅前(M)</th>
+            <th>歸母(M)</th>
+            <th>EPS</th>
+            <th>原文</th>
+          </tr>
+        </thead>
+        <tbody>
+          %s
+        </tbody>
+      </table>
+    </div>
+    """ % "".join(rows)
 
 
 def render_tabbed_dashboard(
@@ -332,11 +938,15 @@ def render_tabbed_dashboard(
     active_tab = active_tab if active_tab in TAB_CHOICES else TAB_MATERIAL_INFO
     if active_tab == TAB_MONTHLY_REVENUE:
         title = "月營收"
-        subtitle = "最新即時月營收公布"
-        content = render_monthly_revenue_placeholder()
+        subtitle_html = render_monthly_revenue_panel_subtitle(records)
+        content = render_monthly_revenue_table(records)
+    elif active_tab == TAB_FINANCIAL_REPORT:
+        title = "財報"
+        subtitle_html = f"<p>{html.escape(f'董事會通過財務報告與早期財報訊號（{len(records)} 筆）')}</p>"
+        content = render_financial_report_table(records)
     else:
-        title = "重大訊息"
-        subtitle = f"近 {recent_days} 日財報自結 EPS（{len(records)} 筆）"
+        title = "自結"
+        subtitle_html = f"<p>{html.escape(f'近 {recent_days} 日財報自結 EPS（{len(records)} 筆）')}</p>"
         content = render_eps_table(records, recent_days)
 
     return f"""
@@ -344,7 +954,7 @@ def render_tabbed_dashboard(
       <div class="dashboard-panel-header">
         <div class="panel-heading">
           <h2>{html.escape(title)}</h2>
-          <p>{html.escape(subtitle)}</p>
+          {subtitle_html}
         </div>
         {render_dashboard_tabs(active_tab)}
       </div>
@@ -464,11 +1074,14 @@ def render_dashboard(
     """Render a minimal HTML dashboard."""
     active_tab = active_tab if active_tab in TAB_CHOICES else TAB_MATERIAL_INFO
     body = render_tabbed_dashboard(records, active_tab, recent_days)
-    searchbar = (
-        render_material_info_searchbar(search_query)
-        if active_tab == TAB_MATERIAL_INFO
-        else ""
-    )
+    if active_tab == TAB_MATERIAL_INFO:
+        searchbar = render_material_info_searchbar(search_query)
+    elif active_tab == TAB_MONTHLY_REVENUE:
+        searchbar = render_monthly_revenue_searchbar(search_query, active_tab)
+    elif active_tab == TAB_FINANCIAL_REPORT:
+        searchbar = render_monthly_revenue_searchbar(search_query, active_tab)
+    else:
+        searchbar = ""
     return f"""<!doctype html>
 <html lang="zh-Hant">
 <head>
@@ -598,6 +1211,16 @@ def render_dashboard(
       margin: 5px 0 0;
       color: var(--muted);
       font-size: 13px;
+    }}
+    .panel-subtitle {{
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.7;
+    }}
+    .monthly-summary-meta {{
+      display: grid;
+      gap: 1px;
     }}
     .tab-switcher {{
       display: inline-flex;
@@ -749,6 +1372,24 @@ def render_dashboard(
     .eps-table td:nth-child(3) {{
       text-align: left;
     }}
+    .monthly-table {{
+      min-width: 1080px;
+    }}
+    .financial-table {{
+      min-width: 1180px;
+    }}
+    .monthly-table th:nth-child(8),
+    .monthly-table td:nth-child(8),
+    .financial-table th:nth-child(10),
+    .financial-table td:nth-child(10) {{
+      text-align: left;
+    }}
+    .subject-cell {{
+      min-width: 260px;
+      max-width: 420px;
+      white-space: normal !important;
+      overflow-wrap: anywhere;
+    }}
     .eps-group-row td {{
       color: #cfd6df;
       background: #1a1e30;
@@ -781,6 +1422,9 @@ def render_dashboard(
       white-space: normal;
       min-width: 240px;
     }}
+    .compact-detail-cell {{
+      min-width: 112px;
+    }}
     .detail-toggle {{
       min-height: 30px;
       color: #7bb7ff;
@@ -798,6 +1442,34 @@ def render_dashboard(
       color: #ffffff;
       border-color: #7bb7ff;
       background: #18324e;
+    }}
+    .source-pill {{
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      padding: 3px 7px;
+      color: #dbeafe;
+      background: #17324d;
+      border: 1px solid #31577c;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 900;
+      white-space: nowrap;
+    }}
+    .time-note {{
+      display: block;
+      margin-top: 3px;
+      color: #8ca0b7;
+      font-size: 11px;
+      font-weight: 800;
+    }}
+    .note-cell {{
+      min-width: 260px;
+      max-width: 460px;
+      color: #b9c2cf;
+      line-height: 1.5;
+      white-space: normal !important;
+      overflow-wrap: anywhere;
     }}
     .eps-detail-panel-row[hidden] {{
       display: none;
@@ -848,6 +1520,12 @@ def render_dashboard(
       font-weight: 800;
       overflow-wrap: anywhere;
     }}
+    .detail-meta-line {{
+      margin-top: 8px;
+      color: #8ca0b7;
+      font-size: 12px;
+      font-weight: 800;
+    }}
     .time-cell,
     .missing-eps .metric-cell,
     .muted-value {{
@@ -865,6 +1543,11 @@ def render_dashboard(
       color: #ff9b42;
       font-weight: 900;
     }}
+    .money-value {{
+      color: #eef3fb;
+      font-weight: 900;
+      font-variant-numeric: tabular-nums;
+    }}
     .primary-metric {{
       border-left: 1px solid #394456;
     }}
@@ -876,23 +1559,21 @@ def render_dashboard(
       color: #ff626f;
       font-weight: 900;
     }}
+    .finance-up {{
+      color: #ff626f;
+      font-weight: 900;
+      font-variant-numeric: tabular-nums;
+    }}
+    .finance-down {{
+      color: #38d46f;
+      font-weight: 900;
+      font-variant-numeric: tabular-nums;
+    }}
     .empty {{
       padding: 24px;
       background: var(--panel);
       border: 1px solid var(--line);
       border-radius: 8px;
-    }}
-    .monthly-placeholder {{
-      margin-top: 18px;
-      padding: 24px;
-      background: var(--panel);
-      border: 1px solid var(--line);
-      border-radius: 8px;
-    }}
-    .monthly-placeholder p {{
-      margin: 0;
-      color: var(--muted);
-      font-size: 14px;
     }}
     @media (max-width: 900px) {{
       .eps-table-wrap {{
@@ -1122,12 +1803,22 @@ class DashboardServer:
         offline_file: Path | None = None,
         update_min_interval_seconds: int = DEFAULT_UPDATE_MIN_INTERVAL_SECONDS,
         allow_unprotected_local_update: bool = False,
+        monthly_revenue_crawler: MonthlyRevenueCrawler | None = None,
+        monthly_revenue_output_path: Path = DEFAULT_MONTHLY_REVENUE_OUTPUT_PATH,
+        monthly_revenue_company_ids: list[str] | None = None,
+        monthly_revenue_market: str = "all",
+        monthly_revenue_roc_year: int | None = None,
+        monthly_revenue_month: int | None = None,
     ) -> None:
         self.crawler = crawler
+        self.monthly_revenue_crawler = monthly_revenue_crawler or MonthlyRevenueCrawler(
+            request_interval_seconds=getattr(crawler, "request_interval_seconds", DEFAULT_REQUEST_INTERVAL_SECONDS)
+        )
         self.max_items = max_items
         self.refresh_seconds = refresh_seconds
         self.output_path = output_path
         self.previous_output_path = previous_output_path
+        self.monthly_revenue_output_path = monthly_revenue_output_path
         self.mode = mode
         self.category = category
         self.range_cache_file = range_cache_file
@@ -1140,6 +1831,10 @@ class DashboardServer:
         self.last_update_result: dict[str, Any] | None = None
         self.cache_records: dict[str, list[dict[str, Any]]] = {}
         self.cache_at: dict[str, float] = {}
+        self.monthly_revenue_company_ids = monthly_revenue_company_ids or []
+        self.monthly_revenue_market = monthly_revenue_market
+        self.monthly_revenue_roc_year = monthly_revenue_roc_year
+        self.monthly_revenue_month = monthly_revenue_month
 
     def get_records(
         self,
@@ -1204,6 +1899,162 @@ class DashboardServer:
         records = sort_records_by_spoke_time(records)
         return records, f"range cache: {cache_file}"
 
+    def _get_monthly_signal_records(
+        self,
+    ) -> tuple[list[dict[str, Any]], str]:
+        now = time.monotonic()
+        cache_key = TAB_MONTHLY_REVENUE
+        if (
+            cache_key not in self.cache_records
+            or now - self.cache_at.get(cache_key, 0.0) >= self.refresh_seconds
+        ):
+            result = self.update_monthly_revenue_cache()
+            self.cache_records[f"{cache_key}:source"] = [
+                {"source": result.get("source", "MOPS monthly revenue endpoints")}
+            ]
+
+        records = sort_event_records(self.cache_records.get(cache_key, []))
+        source_record = self.cache_records.get(
+            f"{cache_key}:source",
+            [{"source": "MOPS monthly revenue endpoints"}],
+        )[0]
+        return records, source_record["source"]
+
+    def _get_monthly_revenue_records(
+        self,
+        search_query: str = "",
+    ) -> tuple[list[dict[str, Any]], str]:
+        now = time.monotonic()
+        cache_key = MONTHLY_REVENUE_SUMMARY_CACHE_KEY
+        if (
+            cache_key not in self.cache_records
+            or now - self.cache_at.get(cache_key, 0.0) >= self.refresh_seconds
+        ):
+            if self.monthly_revenue_output_path.exists():
+                cached_records = self._load_offline_records(self.monthly_revenue_output_path)
+                self.cache_records[cache_key] = sort_event_records(cached_records)
+                self.cache_at[cache_key] = now
+                self.cache_records[f"{cache_key}:source"] = [
+                    {"source": f"monthly revenue cache: {self.monthly_revenue_output_path}"}
+                ]
+            else:
+                result = self.update_monthly_revenue_summary_cache()
+                self.cache_records[f"{cache_key}:source"] = [
+                    {"source": result.get("source", "MOPS t21sc04_ifrs monthly revenue summary")}
+                ]
+        records = sort_event_records(self.cache_records.get(cache_key, []))
+        source_record = self.cache_records.get(
+            f"{cache_key}:source",
+            [{"source": "MOPS t21sc04_ifrs monthly revenue summary"}],
+        )[0]
+        source = source_record["source"]
+        records = [record for record in records if is_monthly_revenue_record(record)]
+        records = select_display_monthly_revenue_records(records)
+        records = filter_monthly_records_by_company_id(records, search_query)
+        return records, source
+
+    def _get_financial_report_records(
+        self,
+        search_query: str = "",
+    ) -> tuple[list[dict[str, Any]], str]:
+        records, source = self._get_monthly_signal_records()
+        records = [record for record in records if is_financial_report_record(record)]
+        records = filter_monthly_records_by_company_id(records, search_query)
+        return records, source
+
+    def _monthly_revenue_summary_markets(self) -> list[str]:
+        if self.monthly_revenue_market == "all":
+            return ["sii", "otc"]
+        return [self.monthly_revenue_market]
+
+    def _current_monthly_revenue_target(self) -> tuple[int, int]:
+        default_roc_year, default_month = previous_month_parts()
+        return (
+            self.monthly_revenue_roc_year or default_roc_year,
+            self.monthly_revenue_month or default_month,
+        )
+
+    def update_monthly_revenue_summary_cache(self) -> dict[str, Any]:
+        cache_file = self.monthly_revenue_output_path
+        existing_records = self._load_offline_records(cache_file) if cache_file.exists() else []
+        before_count = len(existing_records)
+        revenue_roc_year, revenue_month = self._current_monthly_revenue_target()
+
+        fetch_result = self.monthly_revenue_crawler.fetch_monthly_revenue_summary_with_fallbacks(
+            roc_year=revenue_roc_year,
+            month=revenue_month,
+            markets=self._monthly_revenue_summary_markets(),
+        )
+        latest_records = list(fetch_result.get("records", []))
+        market_results = list(fetch_result.get("market_results", []))
+        latest_records, fallback_skipped_existing_primary_count = (
+            filter_monthly_revenue_fallback_duplicates(existing_records, latest_records)
+        )
+        merged_records, new_records = append_new_monthly_revenue_records(
+            existing_records,
+            latest_records,
+        )
+        save_records(merged_records, cache_file)
+
+        self.cache_records[MONTHLY_REVENUE_SUMMARY_CACHE_KEY] = merged_records
+        self.cache_at[MONTHLY_REVENUE_SUMMARY_CACHE_KEY] = time.monotonic()
+        market_failure_count = sum(1 for result in market_results if not result.get("ok"))
+        return {
+            "ok": market_failure_count == 0,
+            "degraded": market_failure_count > 0,
+            "source": "MOPS t21sc04_ifrs monthly revenue summary with OpenAPI fallbacks",
+            "cache_file": str(cache_file),
+            "fetched_count": len(latest_records),
+            "before_count": before_count,
+            "after_count": len(merged_records),
+            "new_count": len(new_records),
+            "markets": self._monthly_revenue_summary_markets(),
+            "market_results": market_results,
+            "market_failure_count": market_failure_count,
+            "fallback_skipped_existing_primary_count": fallback_skipped_existing_primary_count,
+            "data_month": f"{revenue_roc_year}/{revenue_month:02d}",
+            "display_data_month": f"{revenue_roc_year + 1911}/{revenue_month:02d}",
+            "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+
+    def update_monthly_revenue_cache(self) -> dict[str, Any]:
+        cache_file = self.monthly_revenue_output_path
+        existing_records = self._load_offline_records(cache_file) if cache_file.exists() else []
+        before_count = len(dedupe_event_records(existing_records))
+        revenue_roc_year, revenue_month = self._current_monthly_revenue_target()
+
+        latest_records = self.monthly_revenue_crawler.fetch_dashboard_records(
+            company_ids=self.monthly_revenue_company_ids,
+            revenue_roc_year=revenue_roc_year,
+            revenue_month=revenue_month,
+            market=self.monthly_revenue_market,
+            include_realtime=True,
+            include_historical_material=False,
+            include_company_revenue=bool(self.monthly_revenue_company_ids),
+            include_self_profit=bool(self.monthly_revenue_company_ids),
+            max_realtime_items=self.max_items,
+        )
+        merged_records = sort_event_records(
+            dedupe_event_records([*latest_records, *existing_records])
+        )
+        save_records(merged_records, cache_file)
+
+        self.cache_records[TAB_MONTHLY_REVENUE] = merged_records
+        self.cache_at[TAB_MONTHLY_REVENUE] = time.monotonic()
+        return {
+            "ok": True,
+            "source": "MOPS realtime material info + company monthly revenue",
+            "cache_file": str(cache_file),
+            "fetched_count": len(latest_records),
+            "before_count": before_count,
+            "after_count": len(merged_records),
+            "new_count": max(len(merged_records) - before_count, 0),
+            "company_ids": self.monthly_revenue_company_ids,
+            "data_month": f"{revenue_roc_year}/{revenue_month:02d}",
+            "display_data_month": f"{revenue_roc_year + 1911}/{revenue_month:02d}",
+            "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+
     def update_latest_cache(self) -> dict[str, Any]:
         """Fetch realtime rows and merge them into the persistent range cache."""
         now = time.monotonic()
@@ -1249,6 +2100,8 @@ class DashboardServer:
             "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
             "next_allowed_after_seconds": self.update_min_interval_seconds,
         }
+        if self.monthly_revenue_company_ids:
+            result["monthly_revenue"] = self.update_monthly_revenue_cache()
         self.last_update_result = result
         return result
 
@@ -1308,26 +2161,55 @@ def build_handler(dashboard: DashboardServer) -> type[BaseHTTPRequestHandler]:
                     )
                 return
 
+            if path == MONTHLY_REVENUE_UPDATE_API_PATH:
+                if not self._is_update_authorized(query):
+                    self._send_json(
+                        {
+                            "ok": False,
+                            "error": "unauthorized",
+                            "message": f"Set {UPDATE_TOKEN_ENV} and send it with Authorization: Bearer <token>.",
+                        },
+                        status=401,
+                    )
+                    return
+                try:
+                    self._send_json(dashboard.update_monthly_revenue_summary_cache())
+                except Exception as exc:  # pragma: no cover - live endpoint.
+                    self._send_json(
+                        {
+                            "ok": False,
+                            "error": "monthly_revenue_update_failed",
+                            "message": str(exc),
+                        },
+                        status=502,
+                    )
+                return
+
             if path in {"/", "/index.html"}:
                 mode = MODE_RECENT_FINANCIAL
                 category = CATEGORY_FINANCIAL_SELF_REPORT
 
-            if path in {"/", "/index.html"} and active_tab == TAB_MONTHLY_REVENUE:
-                records = []
-                source = "月營收資料尚未接入"
-            else:
-                try:
+            try:
+                if path in {"/", "/index.html", "/api/news"} and active_tab == TAB_MONTHLY_REVENUE:
+                    records, source = dashboard._get_monthly_revenue_records(
+                        search_query=search_query,
+                    )
+                elif path in {"/", "/index.html", "/api/news"} and active_tab == TAB_FINANCIAL_REPORT:
+                    records, source = dashboard._get_financial_report_records(
+                        search_query=search_query,
+                    )
+                else:
                     records, source = dashboard.get_records(
                         mode=mode,
                         category=category,
                         search_query=search_query,
                     )
-                except Exception as exc:  # pragma: no cover - exercised manually.
-                    self.send_response(502)
-                    self.send_header("Content-Type", "text/plain; charset=utf-8")
-                    self.end_headers()
-                    self.wfile.write(f"Failed to load dashboard data: {exc}".encode("utf-8"))
-                    return
+            except Exception as exc:  # pragma: no cover - exercised manually.
+                self.send_response(502)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(f"Failed to load dashboard data: {exc}".encode("utf-8"))
+                return
 
             if path == "/api/news":
                 self._send_json(records)
@@ -1430,6 +2312,39 @@ def crawl_range_command(args: argparse.Namespace) -> None:
     print(f"Saved {len(records)} records for {start_date} to {end_date} ({detail_mode}) to {args.output}")
 
 
+def crawl_monthly_revenue_command(args: argparse.Namespace) -> None:
+    crawler = MonthlyRevenueCrawler(request_interval_seconds=args.request_interval)
+    start_date = args.start_date or default_month_start().isoformat()
+    end_date = args.end_date or date.today().isoformat()
+    reference_date = date.fromisoformat(end_date)
+    default_roc_year, default_month = previous_month_parts(reference_date)
+    revenue_roc_year = args.revenue_roc_year or default_roc_year
+    revenue_month = args.revenue_month or default_month
+    company_ids = normalize_company_ids(args.company_ids)
+
+    records = crawler.fetch_dashboard_records(
+        company_ids=company_ids,
+        revenue_roc_year=revenue_roc_year,
+        revenue_month=revenue_month,
+        material_start_date=start_date,
+        material_end_date=end_date,
+        market=args.market,
+        include_realtime=args.include_realtime,
+        include_historical_material=True,
+        include_company_revenue=not args.skip_company_revenue,
+        include_self_profit=not args.skip_self_profit,
+        max_realtime_items=args.max_realtime_items,
+    )
+    records = filter_monthly_records_by_company_id(records, args.query)
+    save_records(records, args.output)
+    print(
+        f"Saved {len(records)} monthly revenue/financial records "
+        f"for {','.join(company_ids) or 'no-company'} "
+        f"({start_date} to {end_date}, data_month={revenue_roc_year}/{revenue_month:02d}) "
+        f"to {args.output}"
+    )
+
+
 def enrich_cache_command(args: argparse.Namespace) -> None:
     records = json.loads(args.path.read_text(encoding="utf-8"))
     records = enrich_records_for_cache(records, recompute_eps=args.recompute_eps)
@@ -1451,6 +2366,7 @@ def enrich_cache_command(args: argparse.Namespace) -> None:
 
 def serve_command(args: argparse.Namespace) -> None:
     crawler = MopsCrawler(request_interval_seconds=args.request_interval)
+    monthly_crawler = MonthlyRevenueCrawler(request_interval_seconds=args.request_interval)
     dashboard = DashboardServer(
         crawler=crawler,
         max_items=args.max_items,
@@ -1465,6 +2381,12 @@ def serve_command(args: argparse.Namespace) -> None:
         offline_file=args.offline_file,
         update_min_interval_seconds=args.update_min_interval,
         allow_unprotected_local_update=args.allow_unprotected_local_update,
+        monthly_revenue_crawler=monthly_crawler,
+        monthly_revenue_output_path=args.monthly_revenue_cache_file,
+        monthly_revenue_company_ids=normalize_company_ids(args.monthly_revenue_company_ids),
+        monthly_revenue_market=args.monthly_revenue_market,
+        monthly_revenue_roc_year=args.monthly_revenue_year,
+        monthly_revenue_month=args.monthly_revenue_month,
     )
     server = ThreadingHTTPServer((args.host, args.port), build_handler(dashboard))
     print(f"Serving dashboard at http://{args.host}:{args.port}")
@@ -1516,6 +2438,37 @@ def build_parser() -> argparse.ArgumentParser:
     crawl_range.add_argument("--output", type=Path, default=DEFAULT_RANGE_OUTPUT_PATH)
     crawl_range.set_defaults(func=crawl_range_command)
 
+    crawl_monthly = subparsers.add_parser(
+        "crawl-monthly-revenue",
+        help="Fetch early monthly revenue and financial-report signals",
+    )
+    crawl_monthly.add_argument("--company-ids", default="4739", help="Comma-separated stock codes")
+    crawl_monthly.add_argument("--start-date", help="Material-info start date, e.g. 2026-05-05")
+    crawl_monthly.add_argument("--end-date", help="Material-info end date, e.g. 2026-05-15")
+    crawl_monthly.add_argument("--revenue-roc-year", type=int, help="Revenue ROC year, e.g. 115")
+    crawl_monthly.add_argument("--revenue-month", type=int, help="Revenue data month, e.g. 4")
+    crawl_monthly.add_argument("--market", default="all", choices=["all", "sii", "otc", "rotc", "pub"])
+    crawl_monthly.add_argument("--query", default="", help="Optional stock/company code filter")
+    crawl_monthly.add_argument("--request-interval", type=float, default=DEFAULT_REQUEST_INTERVAL_SECONDS)
+    crawl_monthly.add_argument("--max-realtime-items", type=int, default=0)
+    crawl_monthly.add_argument(
+        "--include-realtime",
+        action="store_true",
+        help="Also check current realtime material-info rows",
+    )
+    crawl_monthly.add_argument(
+        "--skip-company-revenue",
+        action="store_true",
+        help="Skip t05st10_ifrs single-company monthly revenue",
+    )
+    crawl_monthly.add_argument(
+        "--skip-self-profit",
+        action="store_true",
+        help="Skip t138sb02 monthly/quarterly self-profit pages",
+    )
+    crawl_monthly.add_argument("--output", type=Path, default=DEFAULT_MONTHLY_REVENUE_OUTPUT_PATH)
+    crawl_monthly.set_defaults(func=crawl_monthly_revenue_command)
+
     enrich_cache = subparsers.add_parser(
         "enrich-cache",
         help="Write derived category and EPS metrics back to an existing JSON cache",
@@ -1540,6 +2493,19 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--max-items", type=int, default=0)
     serve.add_argument("--refresh-seconds", type=int, default=DEFAULT_REFRESH_SECONDS)
     serve.add_argument("--update-min-interval", type=int, default=env_int(UPDATE_MIN_INTERVAL_ENV, DEFAULT_UPDATE_MIN_INTERVAL_SECONDS))
+    serve.add_argument(
+        "--monthly-revenue-company-ids",
+        default=os.environ.get(MONTHLY_REVENUE_COMPANY_IDS_ENV, ""),
+        help="Comma-separated watchlist for t05st10_ifrs single-company monthly revenue",
+    )
+    serve.add_argument(
+        "--monthly-revenue-cache-file",
+        type=Path,
+        default=env_path(MONTHLY_REVENUE_CACHE_FILE_ENV) or DEFAULT_MONTHLY_REVENUE_OUTPUT_PATH,
+    )
+    serve.add_argument("--monthly-revenue-market", default="all", choices=["all", "sii", "otc", "rotc", "pub"])
+    serve.add_argument("--monthly-revenue-year", type=int, help="ROC year for the watched monthly revenue data")
+    serve.add_argument("--monthly-revenue-month", type=int, help="Month for the watched monthly revenue data")
     serve.add_argument(
         "--allow-unprotected-local-update",
         action="store_true",

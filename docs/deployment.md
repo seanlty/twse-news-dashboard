@@ -64,6 +64,32 @@ When moving to production, run the update request every 5 minutes during the act
 
 The scheduler can be a host cron, GitHub Actions, or an external cron service. The dashboard server already has a 300 second cooldown on `/api/admin/update`, so accidental repeated calls should not immediately hammer MOPS.
 
+## Monthly Revenue Scheduler Memo
+
+When enabling the monthly revenue tab in production, keep the update flow separate from material information, self-profit, and financial report crawlers.
+
+The monthly revenue cache update endpoint is `POST /api/admin/update-monthly-revenue` and uses the same `Authorization: Bearer <TWSE_DASHBOARD_UPDATE_TOKEN>` contract.
+
+Monthly revenue scheduler direction:
+
+1. Run a cron, GitHub Actions schedule, or external cron service every 5 minutes during `07:00-23:00 Asia/Taipei`.
+2. Each scheduled call dynamically targets the previous calendar month as the revenue month. For example, calls during July 2026 target `2026/06` monthly revenue.
+3. First fetch MOPS `t21sc04_ifrs` monthly revenue summary for both `sii` and `otc`.
+4. If `sii` fails, use TWSE OpenAPI `https://openapi.twse.com.tw/v1/opendata/t187ap05_L` as the listed-company fallback.
+5. If `otc` fails, use TPEX OpenAPI `https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap05_O` as the OTC-company fallback.
+6. Append only new or changed rows to the monthly revenue cache. Use crawler `detected_at` as the data-observed timestamp.
+7. Do not use official `出表日期` as the row data time. Keep `出表日期` only as a source field.
+8. If a fallback also fails, keep the previous cache for that market and record the market failure in the monthly revenue update response.
+9. The page reads the multi-period cache but displays only the newest available revenue month. Before the new month appears, it keeps showing the prior month; after any new-month row appears, it switches to that month only.
+10. Set `FINMIND_TOKEN` or `FINMIND_API_TOKEN` in the production environment so the page can use FinMind `TaiwanStockTradingDate` for the latest completed market-close date. If FinMind is unavailable, the page falls back to weekday-based close detection.
+
+Source role notes:
+
+- `t21sc04_ifrs`: primary source for listed plus OTC monthly revenue. It supports market/month selection and is better for complete market coverage.
+- `t187ap05_L`: fallback or cross-check source for listed companies only. It is fast and JSON-shaped, but it cannot replace `t21sc04_ifrs` for full listed plus OTC coverage by itself.
+- `mopsfin_t187ap05_O`: fallback or cross-check source for OTC companies from TPEX OpenAPI. It completes the listed plus OTC fallback plan, but MOPS remains the primary source when available.
+- `TaiwanStockTradingDate`: FinMind trading-calendar source used only to classify monthly revenue rows into `市場未反映` versus `歷史公告`. The row timestamp remains crawler `detected_at`.
+
 ## Cache before first deploy
 
 Before deploying, make sure the demo/range cache has derived EPS fields written to disk:
