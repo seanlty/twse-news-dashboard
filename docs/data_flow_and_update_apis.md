@@ -1,0 +1,106 @@
+# Dashboard Data Flow and Update API Tracker
+
+This note records the current dashboard data path, update endpoints, cache files, and open follow-up items.
+
+## Page Entry Points
+
+- `GET /` and `GET /index.html`: render the HTML dashboard.
+- `GET /api/news?tab=<tab>`: return the current tab records as JSON.
+- Supported tab values:
+  - `material-info`: self-reported EPS tab, displayed as `自結`.
+  - `monthly-revenue`: monthly revenue tab, displayed as `月營收`.
+  - `financial-report`: financial report tab, displayed as `財報`.
+
+## Self-Reported EPS Tab
+
+Current display flow:
+
+1. `DashboardServer.get_records()` routes `MODE_RECENT_FINANCIAL` to `_get_recent_financial_records()`.
+2. `_get_recent_financial_records()` loads the range cache from `TWSE_DASHBOARD_RANGE_CACHE_FILE`, or the newest `data/raw/material_info_*.json` file.
+3. Records are filtered to recent days, `CATEGORY_FINANCIAL_SELF_REPORT`, listed/OTC markets, and rows with EPS metrics.
+4. Rows are split into `市場未反映` and `歷史公告` by the latest completed market close date.
+5. The tab title area shows latest announcement time from the newest record in the rendered dataset.
+
+Update API:
+
+- `POST /api/admin/update`
+- Auth: `Authorization: Bearer <TWSE_DASHBOARD_UPDATE_TOKEN>`
+- Cooldown: `TWSE_DASHBOARD_UPDATE_MIN_INTERVAL`, default `300` seconds.
+- Behavior: fetch realtime MOPS rows, enrich EPS/category fields, merge into the persistent range cache, then invalidate the recent-financial memory cache.
+
+Primary cache:
+
+- `TWSE_DASHBOARD_RANGE_CACHE_FILE`
+- Default fallback: newest `data/raw/material_info_*.json`, or `data/raw/material_info_range.json`.
+
+## Monthly Revenue Tab
+
+Current display flow:
+
+1. `DashboardServer._get_monthly_revenue_records()` loads `data/raw/monthly_revenue_latest.json` or `TWSE_DASHBOARD_MONTHLY_REVENUE_CACHE_FILE`.
+2. The page keeps only monthly revenue records and selects the newest available revenue period.
+3. Before a new period appears, the newest complete previous period remains visible.
+4. After any newer-period row appears, only that newer period is displayed.
+5. Company rows are de-duplicated by market, company code, and revenue period.
+6. Rows are sorted by crawler/event time and split into `市場未反映` and `歷史公告`.
+7. `detected_at` remains the data-observed timestamp. Official source dates are kept as source fields only.
+
+Update API:
+
+- `POST /api/admin/update-monthly-revenue`
+- Auth: same `Authorization: Bearer <TWSE_DASHBOARD_UPDATE_TOKEN>` contract.
+- Behavior: dynamically target the previous calendar month, fetch listed and OTC monthly revenue summary, append new or changed rows to the monthly revenue cache.
+
+Source priority:
+
+1. MOPS `t21sc04_ifrs` for listed plus OTC monthly revenue summary.
+2. TWSE OpenAPI `https://openapi.twse.com.tw/v1/opendata/t187ap05_L` as listed-company fallback.
+3. TPEX OpenAPI `https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap05_O` as OTC-company fallback.
+4. FinMind `TaiwanStockTradingDate` only for latest completed trading-day close classification.
+
+Primary cache:
+
+- `TWSE_DASHBOARD_MONTHLY_REVENUE_CACHE_FILE`
+- Default: `data/raw/monthly_revenue_latest.json`
+
+## Financial Report Tab
+
+Current display flow:
+
+1. `DashboardServer._get_financial_report_records()` reads from the monthly signal cache path.
+2. Records are filtered with `is_financial_report_record()`.
+3. Rows are split into `市場未反映` and `歷史公告` by the same market-close classifier.
+4. Original announcement text stays available through the same expandable-row pattern as the self-reported EPS tab.
+
+Current limitation:
+
+- There is no dedicated financial-report update endpoint yet.
+- The tab currently depends on the monthly signal cache refresh path, not a separate persistent financial-report cache.
+
+## Shared Table Behavior
+
+- All tab tables are client-sortable through header buttons.
+- Sorting is local to the browser and does not call update APIs.
+- Group headers stay in place; rows are sorted within each `市場未反映` / `歷史公告` group.
+- Expandable detail rows move together with their parent data row.
+
+## Environment Variables
+
+- `TWSE_DASHBOARD_UPDATE_TOKEN`: required for update endpoints in production.
+- `TWSE_DASHBOARD_RANGE_CACHE_FILE`: self-reported EPS range cache path.
+- `TWSE_DASHBOARD_MONTHLY_REVENUE_CACHE_FILE`: monthly revenue cache path.
+- `TWSE_DASHBOARD_UPDATE_MIN_INTERVAL`: update cooldown seconds.
+- `TWSE_DASHBOARD_RECENT_DAYS`: self-reported EPS lookback window.
+- `FINMIND_TOKEN` or `FINMIND_API_TOKEN`: FinMind trading calendar token for market-close classification.
+
+## Update Progress
+
+| Area | Status | Notes |
+| --- | --- | --- |
+| Self-reported EPS update API | Done | `/api/admin/update` merges realtime MOPS rows into range cache. |
+| Monthly revenue update API | Done | `/api/admin/update-monthly-revenue` updates newest target month with TWSE/TPEX fallbacks. |
+| Monthly revenue newest-period display | Done | Page shows only the newest available revenue period. |
+| Trading-day market reaction split | Done | Uses FinMind trading calendar when available, weekday fallback otherwise. |
+| Sortable tables | Done | All three tab tables support local grouped sorting. |
+| Financial report dedicated update/cache | Todo | Needs a separate endpoint/cache if the financial report tab must update independently. |
+| Deployment scheduler | Todo | Configure production cron/GitHub Actions for both update endpoints. |

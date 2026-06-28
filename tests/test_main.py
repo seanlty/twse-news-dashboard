@@ -290,6 +290,9 @@ def test_default_page_renders_material_info_tab(tmp_path: Path) -> None:
     assert 'aria-current="page">自結</a>' in html
     assert "EPS年增差" in html
     assert "3163" in html
+    assert "最新公告：06-26 16:06:00" in html
+    assert "data-sortable-table" in html
+    assert 'class="sort-button"' in html
     assert "月營收資料抓取功能待補" not in html
 
 
@@ -314,6 +317,8 @@ def test_monthly_revenue_tab_renders_records(tmp_path: Path) -> None:
     assert "本月營收及累計營收較去年同期增加。" in html
     assert "營收期間：2026/04 | 已申報 1 家" in html
     assert "最新申報：05-07 16:00:00" in html
+    assert "data-sortable-table" in html
+    assert 'data-sort-type="number"' in html
     assert 'class="detail-toggle"' not in html
     assert "monthly-detail-panel" not in html
     assert "本公司董事會通過115年第一季合併財務報告" not in html
@@ -529,6 +534,8 @@ def test_financial_report_tab_renders_financial_records(tmp_path: Path) -> None:
     assert "本公司董事會通過115年第一季合併財務報告" in html
     assert "2,370.7" in html
     assert "1.51" in html
+    assert "data-sortable-table" in html
+    assert 'data-sort-type="time"' in html
     assert "1,026.9" not in html
     assert 'name="q"' in html
 

@@ -190,6 +190,30 @@ def render_percent_value(value: Any) -> str:
     return f'<span class="{class_name}">{percent:.2f}%</span>'
 
 
+def sort_value_attr(value: Any) -> str:
+    text = "" if value is None else str(value)
+    return f' data-sort-value="{html.escape(text, quote=True)}"'
+
+
+def metric_sort_value(value: Any) -> str:
+    number = metric_float(value)
+    return "" if number is None else f"{number:.8f}"
+
+
+def sortable_header(label: str, sort_type: str = "text") -> str:
+    return (
+        '<th scope="col" aria-sort="none">'
+        f'<button class="sort-button" type="button" data-sort-type="{html.escape(sort_type, quote=True)}">'
+        f'<span>{html.escape(label)}</span><span class="sort-indicator" aria-hidden="true"></span>'
+        "</button>"
+        "</th>"
+    )
+
+
+def render_sortable_headers(columns: list[tuple[str, str]]) -> str:
+    return "\n".join(sortable_header(label, sort_type) for label, sort_type in columns)
+
+
 def record_text(record: dict[str, Any]) -> str:
     detail = record.get("detail") or record.get("detail_preview") or {}
     pieces = [
@@ -250,13 +274,19 @@ def filter_monthly_revenue_fallback_duplicates(
     return filtered_records, skipped_count
 
 
-def render_eps_delta(metrics: dict[str, Any]) -> str:
+def eps_delta_value(metrics: dict[str, Any]) -> float | None:
     current = metric_float(metrics.get("month_eps"))
     previous = metric_float(metrics.get("last_year_month_eps"))
     if current is None or previous is None:
+        return None
+    return current - previous
+
+
+def render_eps_delta(metrics: dict[str, Any]) -> str:
+    delta = eps_delta_value(metrics)
+    if delta is None:
         return "<span class=\"muted-value\">-</span>"
 
-    delta = current - previous
     class_name = "positive" if delta > 0 else "negative" if delta < 0 else "muted-value"
     return f"<span class=\"{class_name}\">{delta:+.2f}</span>"
 
@@ -309,6 +339,26 @@ def format_event_table_time_with_seconds(record: dict[str, Any]) -> str:
             f"{event_at.hour:02d}:{event_at.minute:02d}:{event_at.second:02d}"
         )
     return display_event_time(record)
+
+
+def event_sort_value(record: dict[str, Any]) -> str:
+    event_at = parse_event_datetime(record)
+    if event_at is None:
+        return ""
+    if event_at.tzinfo is not None:
+        event_at = event_at.astimezone(TAIWAN_TZ)
+    return event_at.strftime("%Y%m%d%H%M%S")
+
+
+def latest_event_record(records: list[dict[str, Any]]) -> dict[str, Any] | None:
+    candidates = [
+        (sort_value, record)
+        for record in records
+        if (sort_value := event_sort_value(record))
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda item: item[0])[1]
 
 
 def monthly_revenue_period_key(record: dict[str, Any]) -> tuple[int, int] | None:
@@ -389,6 +439,21 @@ def render_monthly_revenue_panel_subtitle(records: list[dict[str, Any]]) -> str:
     <div class="panel-subtitle monthly-summary-meta">
       <div>營收期間：{html.escape(period)} | 已申報 {monthly_revenue_company_count(records)} 家</div>
       <div>最新申報：{html.escape(latest_text)} · 偵測中 ✓</div>
+    </div>
+    """
+
+
+def render_material_info_panel_subtitle(records: list[dict[str, Any]], recent_days: int) -> str:
+    latest_record = latest_event_record(records)
+    latest_text = (
+        format_event_table_time_with_seconds(latest_record)
+        if latest_record is not None
+        else "-"
+    )
+    return f"""
+    <div class="panel-subtitle">
+      <div>近 {recent_days} 日財報自結 EPS（{len(records)} 筆）</div>
+      <div>最新公告：{html.escape(latest_text)}</div>
     </div>
     """
 
@@ -790,34 +855,43 @@ def render_monthly_revenue_table(records: list[dict[str, Any]]) -> str:
         for record in section_records:
             time_note = "公告" if record.get("announced_at") else "偵測"
             note = monthly_note(record)
+            revenue_value = record_field_value(record, "monthly_revenue", "本月", "營業收入-當月營收")
+            mom_value = monthly_mom_percent(record)
+            yoy_value = record_field_value(record, "yoy_percent", "本月增減百分比", "營業收入-去年同月增減(%)")
+            ytd_yoy_value = record_field_value(record, "ytd_yoy_percent", "累計增減百分比", "累計營業收入-前期比較增減(%)")
             rows.append(
                 f"""
                 <tr class="eps-data-row">
-                  <td class="code-cell" data-label="代號">{html.escape(str(record.get("company_id", "")))}</td>
-                  <td class="name-cell" data-label="名稱">{html.escape(str(record.get("company_name", "")))}</td>
-                  <td class="time-cell" data-label="偵測時間">{html.escape(format_event_table_time(record))}<span class="time-note">{html.escape(time_note)}</span></td>
-                  <td class="metric-cell primary-metric" data-label="營收(M)">{render_money_millions(record_field_value(record, "monthly_revenue", "本月", "營業收入-當月營收"))}</td>
-                  <td data-label="MOM%">{render_percent_value(monthly_mom_percent(record))}</td>
-                  <td data-label="YOY%">{render_percent_value(record_field_value(record, "yoy_percent", "本月增減百分比", "營業收入-去年同月增減(%)"))}</td>
-                  <td data-label="累計YOY%">{render_percent_value(record_field_value(record, "ytd_yoy_percent", "累計增減百分比", "累計營業收入-前期比較增減(%)"))}</td>
-                  <td class="note-cell" data-label="備註">{html.escape(note) if note else '<span class="muted-value">-</span>'}</td>
+                  <td class="code-cell" data-label="代號"{sort_value_attr(record.get("company_id", ""))}>{html.escape(str(record.get("company_id", "")))}</td>
+                  <td class="name-cell" data-label="名稱"{sort_value_attr(record.get("company_name", ""))}>{html.escape(str(record.get("company_name", "")))}</td>
+                  <td class="time-cell" data-label="偵測時間"{sort_value_attr(event_sort_value(record))}>{html.escape(format_event_table_time(record))}<span class="time-note">{html.escape(time_note)}</span></td>
+                  <td class="metric-cell primary-metric" data-label="營收(M)"{sort_value_attr(metric_sort_value(revenue_value))}>{render_money_millions(revenue_value)}</td>
+                  <td data-label="MOM%"{sort_value_attr(metric_sort_value(mom_value))}>{render_percent_value(mom_value)}</td>
+                  <td data-label="YOY%"{sort_value_attr(metric_sort_value(yoy_value))}>{render_percent_value(yoy_value)}</td>
+                  <td data-label="累計YOY%"{sort_value_attr(metric_sort_value(ytd_yoy_value))}>{render_percent_value(ytd_yoy_value)}</td>
+                  <td class="note-cell" data-label="備註"{sort_value_attr(note)}>{html.escape(note) if note else '<span class="muted-value">-</span>'}</td>
                 </tr>
                 """
             )
 
+    headers = render_sortable_headers(
+        [
+            ("代號", "text"),
+            ("名稱", "text"),
+            ("偵測時間", "time"),
+            ("營收(M)", "number"),
+            ("MOM%", "number"),
+            ("YOY%", "number"),
+            ("累計YOY%", "number"),
+            ("備註", "text"),
+        ]
+    )
     return f"""
     <div class="eps-table-wrap">
-      <table class="eps-table monthly-table">
+      <table class="eps-table monthly-table" data-sortable-table>
         <thead>
           <tr>
-            <th>代號</th>
-            <th>名稱</th>
-            <th>偵測時間</th>
-            <th>營收(M)</th>
-            <th>MOM%</th>
-            <th>YOY%</th>
-            <th>累計YOY%</th>
-            <th>備註</th>
+            {headers}
           </tr>
         </thead>
         <tbody>
@@ -877,19 +951,25 @@ def render_financial_report_table(records: list[dict[str, Any]]) -> str:
             detail_index += 1
             title = str(record.get("title") or record.get("subject") or "")
             source_label = str(record.get("source_label") or "")
+            operating_revenue = financial_metric(record, "operating_revenue")
+            gross_profit = financial_metric(record, "gross_profit")
+            operating_income = financial_metric(record, "operating_income")
+            pre_tax_income = financial_metric(record, "pre_tax_income")
+            parent_net_income = financial_metric(record, "parent_net_income")
+            eps = financial_metric(record, "eps")
             rows.append(
                 f"""
                 <tr class="eps-data-row" data-detail-target="{detail_id}" tabindex="0" aria-expanded="false">
-                  <td class="time-cell" data-label="時間">{html.escape(format_event_table_time(record))}</td>
-                  <td class="code-cell" data-label="代號">{html.escape(str(record.get("company_id", "")))}</td>
-                  <td class="name-cell" data-label="名稱">{html.escape(str(record.get("company_name", "")))}</td>
-                  <td class="metric-cell primary-metric" data-label="營收(M)">{render_money_millions(financial_metric(record, "operating_revenue"))}</td>
-                  <td class="metric-cell" data-label="毛利(M)">{render_money_millions(financial_metric(record, "gross_profit"))}</td>
-                  <td class="metric-cell" data-label="營益(M)">{render_money_millions(financial_metric(record, "operating_income"))}</td>
-                  <td class="metric-cell" data-label="稅前(M)">{render_money_millions(financial_metric(record, "pre_tax_income"))}</td>
-                  <td class="metric-cell" data-label="歸母(M)">{render_money_millions(financial_metric(record, "parent_net_income"))}</td>
-                  <td class="metric-cell" data-label="EPS">{render_metric(financial_metric(record, "eps"))}</td>
-                  <td class="detail-cell compact-detail-cell" data-label="原文">
+                  <td class="time-cell" data-label="時間"{sort_value_attr(event_sort_value(record))}>{html.escape(format_event_table_time(record))}</td>
+                  <td class="code-cell" data-label="代號"{sort_value_attr(record.get("company_id", ""))}>{html.escape(str(record.get("company_id", "")))}</td>
+                  <td class="name-cell" data-label="名稱"{sort_value_attr(record.get("company_name", ""))}>{html.escape(str(record.get("company_name", "")))}</td>
+                  <td class="metric-cell primary-metric" data-label="營收(M)"{sort_value_attr(metric_sort_value(operating_revenue))}>{render_money_millions(operating_revenue)}</td>
+                  <td class="metric-cell" data-label="毛利(M)"{sort_value_attr(metric_sort_value(gross_profit))}>{render_money_millions(gross_profit)}</td>
+                  <td class="metric-cell" data-label="營益(M)"{sort_value_attr(metric_sort_value(operating_income))}>{render_money_millions(operating_income)}</td>
+                  <td class="metric-cell" data-label="稅前(M)"{sort_value_attr(metric_sort_value(pre_tax_income))}>{render_money_millions(pre_tax_income)}</td>
+                  <td class="metric-cell" data-label="歸母(M)"{sort_value_attr(metric_sort_value(parent_net_income))}>{render_money_millions(parent_net_income)}</td>
+                  <td class="metric-cell" data-label="EPS"{sort_value_attr(metric_sort_value(eps))}>{render_metric(eps)}</td>
+                  <td class="detail-cell compact-detail-cell" data-label="原文"{sort_value_attr(title or description)}>
                     <button class="detail-toggle" type="button" aria-controls="{detail_id}" aria-expanded="false">詳細原文</button>
                   </td>
                 </tr>
@@ -905,29 +985,34 @@ def render_financial_report_table(records: list[dict[str, Any]]) -> str:
                 """
             )
 
-    return """
+    headers = render_sortable_headers(
+        [
+            ("時間", "time"),
+            ("代號", "text"),
+            ("名稱", "text"),
+            ("營收(M)", "number"),
+            ("毛利(M)", "number"),
+            ("營益(M)", "number"),
+            ("稅前(M)", "number"),
+            ("歸母(M)", "number"),
+            ("EPS", "number"),
+            ("原文", "text"),
+        ]
+    )
+    return f"""
     <div class="eps-table-wrap">
-      <table class="eps-table financial-table">
+      <table class="eps-table financial-table" data-sortable-table>
         <thead>
           <tr>
-            <th>時間</th>
-            <th>代號</th>
-            <th>名稱</th>
-            <th>營收(M)</th>
-            <th>毛利(M)</th>
-            <th>營益(M)</th>
-            <th>稅前(M)</th>
-            <th>歸母(M)</th>
-            <th>EPS</th>
-            <th>原文</th>
+            {headers}
           </tr>
         </thead>
         <tbody>
-          %s
+          {"".join(rows)}
         </tbody>
       </table>
     </div>
-    """ % "".join(rows)
+    """
 
 
 def render_tabbed_dashboard(
@@ -946,7 +1031,7 @@ def render_tabbed_dashboard(
         content = render_financial_report_table(records)
     else:
         title = "自結"
-        subtitle_html = f"<p>{html.escape(f'近 {recent_days} 日財報自結 EPS（{len(records)} 筆）')}</p>"
+        subtitle_html = render_material_info_panel_subtitle(records, recent_days)
         content = render_eps_table(records, recent_days)
 
     return f"""
@@ -1010,17 +1095,17 @@ def render_eps_table(records: list[dict[str, Any]], recent_days: int) -> str:
             rows.append(
             f"""
             <tr class="eps-data-row{missing_class}" data-detail-target="{detail_id}" tabindex="0" aria-expanded="false">
-              <td class="time-cell" data-label="時間">{html.escape(format_table_time(record))}</td>
-              <td class="code-cell" data-label="代號">{html.escape(record.get("company_id", ""))}</td>
-              <td class="name-cell" data-label="名稱">{html.escape(record.get("company_name", ""))}</td>
-              <td data-label="EPS年增差">{render_eps_delta(metrics)}</td>
-              <td data-label="期間">{render_metric(metrics.get("period"))}</td>
-              <td class="metric-cell primary-metric" data-label="EPS">{render_metric(metrics.get("month_eps"))}</td>
-              <td data-label="去年同期EPS">{render_metric(metrics.get("last_year_month_eps"))}</td>
-              <td data-label="上季">{render_metric(metrics.get("quarter"))}</td>
-              <td data-label="上季EPS/3">{render_metric(metrics.get("quarter_eps_div3"))}</td>
-              <td class="metric-cell" data-label="上季EPS">{render_metric(metrics.get("quarter_eps"))}</td>
-              <td class="detail-cell" data-label="原文">
+              <td class="time-cell" data-label="時間"{sort_value_attr(event_sort_value(record))}>{html.escape(format_table_time(record))}</td>
+              <td class="code-cell" data-label="代號"{sort_value_attr(record.get("company_id", ""))}>{html.escape(record.get("company_id", ""))}</td>
+              <td class="name-cell" data-label="名稱"{sort_value_attr(record.get("company_name", ""))}>{html.escape(record.get("company_name", ""))}</td>
+              <td data-label="EPS年增差"{sort_value_attr(metric_sort_value(eps_delta_value(metrics)))}>{render_eps_delta(metrics)}</td>
+              <td data-label="期間"{sort_value_attr(metrics.get("period"))}>{render_metric(metrics.get("period"))}</td>
+              <td class="metric-cell primary-metric" data-label="EPS"{sort_value_attr(metric_sort_value(metrics.get("month_eps")))}>{render_metric(metrics.get("month_eps"))}</td>
+              <td data-label="去年同期EPS"{sort_value_attr(metric_sort_value(metrics.get("last_year_month_eps")))}>{render_metric(metrics.get("last_year_month_eps"))}</td>
+              <td data-label="上季"{sort_value_attr(metrics.get("quarter"))}>{render_metric(metrics.get("quarter"))}</td>
+              <td data-label="上季EPS/3"{sort_value_attr(metric_sort_value(metrics.get("quarter_eps_div3")))}>{render_metric(metrics.get("quarter_eps_div3"))}</td>
+              <td class="metric-cell" data-label="上季EPS"{sort_value_attr(metric_sort_value(metrics.get("quarter_eps")))}>{render_metric(metrics.get("quarter_eps"))}</td>
+              <td class="detail-cell" data-label="原文"{sort_value_attr(record.get("subject") or description)}>
                 <button class="detail-toggle" type="button" aria-controls="{detail_id}" aria-expanded="false">詳細原文</button>
               </td>
             </tr>
@@ -1035,22 +1120,27 @@ def render_eps_table(records: list[dict[str, Any]], recent_days: int) -> str:
             """
             )
 
+    headers = render_sortable_headers(
+        [
+            ("時間", "time"),
+            ("代號", "text"),
+            ("名稱", "text"),
+            ("EPS年增差", "number"),
+            ("期間", "text"),
+            ("EPS", "number"),
+            ("去年同期EPS", "number"),
+            ("上季", "text"),
+            ("上季EPS/3", "number"),
+            ("上季EPS", "number"),
+            ("原文", "text"),
+        ]
+    )
     return f"""
     <div class="eps-table-wrap">
-      <table class="eps-table">
+      <table class="eps-table" data-sortable-table>
         <thead>
           <tr>
-            <th>時間</th>
-            <th>代號</th>
-            <th>名稱</th>
-            <th>EPS年增差</th>
-            <th>期間</th>
-            <th>EPS</th>
-            <th>去年同期EPS</th>
-            <th>上季</th>
-            <th>上季EPS/3</th>
-            <th>上季EPS</th>
-            <th>原文</th>
+            {headers}
           </tr>
         </thead>
         <tbody>
@@ -1364,6 +1454,51 @@ def render_dashboard(
       font-size: 13px;
       font-weight: 800;
     }}
+    .sort-button {{
+      display: inline-flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 5px;
+      width: 100%;
+      padding: 0;
+      border: 0;
+      color: inherit;
+      background: transparent;
+      font: inherit;
+      font-weight: inherit;
+      text-align: inherit;
+      cursor: pointer;
+      white-space: nowrap;
+    }}
+    .sort-button:hover,
+    .sort-button:focus-visible {{
+      color: #dbeafe;
+    }}
+    .sort-button:focus-visible {{
+      outline: 2px solid #7bb7ff;
+      outline-offset: 3px;
+      border-radius: 4px;
+    }}
+    .sort-indicator {{
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 10px;
+      color: #64748b;
+      font-size: 10px;
+      line-height: 1;
+    }}
+    .sort-indicator::before {{
+      content: "↕";
+    }}
+    .eps-table th[aria-sort="ascending"] .sort-indicator::before {{
+      content: "▲";
+      color: #7bb7ff;
+    }}
+    .eps-table th[aria-sort="descending"] .sort-indicator::before {{
+      content: "▼";
+      color: #7bb7ff;
+    }}
     .eps-table th:nth-child(1),
     .eps-table th:nth-child(2),
     .eps-table th:nth-child(3),
@@ -1371,6 +1506,11 @@ def render_dashboard(
     .eps-table td:nth-child(2),
     .eps-table td:nth-child(3) {{
       text-align: left;
+    }}
+    .eps-table th:nth-child(1) .sort-button,
+    .eps-table th:nth-child(2) .sort-button,
+    .eps-table th:nth-child(3) .sort-button {{
+      justify-content: flex-start;
     }}
     .monthly-table {{
       min-width: 1080px;
@@ -1730,6 +1870,7 @@ def render_dashboard(
   <script>
     (() => {{
       const rows = Array.from(document.querySelectorAll(".eps-data-row[data-detail-target]"));
+      const sortableTables = Array.from(document.querySelectorAll("table[data-sortable-table]"));
 
       const setOpen = (row, open) => {{
         const panel = document.getElementById(row.dataset.detailTarget);
@@ -1777,6 +1918,133 @@ def render_dashboard(
         button?.addEventListener("click", (event) => {{
           event.stopPropagation();
           toggleRow(row);
+        }});
+      }});
+
+      const normalizeSortText = (value) => (value || "").trim();
+
+      const parseSortNumber = (value) => {{
+        const cleaned = normalizeSortText(value).replace(/[,%+]/g, "");
+        if (!cleaned || cleaned === "-") {{
+          return null;
+        }}
+        const parsed = Number(cleaned);
+        return Number.isFinite(parsed) ? parsed : null;
+      }};
+
+      const getCellSortValue = (row, columnIndex, sortType) => {{
+        const cell = row.cells[columnIndex];
+        if (!cell) {{
+          return "";
+        }}
+        const rawValue = cell.dataset.sortValue ?? cell.textContent;
+        if (sortType === "number" || sortType === "time") {{
+          const parsed = parseSortNumber(rawValue);
+          return parsed === null ? "" : parsed;
+        }}
+        return normalizeSortText(rawValue).toLocaleLowerCase("zh-Hant");
+      }};
+
+      const comparePairs = (columnIndex, sortType, direction) => (left, right) => {{
+        const leftValue = getCellSortValue(left.row, columnIndex, sortType);
+        const rightValue = getCellSortValue(right.row, columnIndex, sortType);
+        const leftEmpty = leftValue === "";
+        const rightEmpty = rightValue === "";
+        if (leftEmpty || rightEmpty) {{
+          if (leftEmpty && rightEmpty) {{
+            return left.index - right.index;
+          }}
+          return leftEmpty ? 1 : -1;
+        }}
+
+        let comparison = 0;
+        if (typeof leftValue === "number" && typeof rightValue === "number") {{
+          comparison = leftValue - rightValue;
+        }} else {{
+          comparison = String(leftValue).localeCompare(String(rightValue), "zh-Hant", {{
+            numeric: true,
+            sensitivity: "base",
+          }});
+        }}
+        if (comparison === 0) {{
+          comparison = left.index - right.index;
+        }}
+        return direction === "asc" ? comparison : -comparison;
+      }};
+
+      const getSortableGroups = (tbody) => {{
+        const groups = [];
+        let currentGroup = {{ header: null, pairs: [], extras: [] }};
+        groups.push(currentGroup);
+        const bodyRows = Array.from(tbody.children);
+        for (let index = 0; index < bodyRows.length; index += 1) {{
+          const row = bodyRows[index];
+          if (row.classList.contains("eps-group-row")) {{
+            currentGroup = {{ header: row, pairs: [], extras: [] }};
+            groups.push(currentGroup);
+            continue;
+          }}
+          if (row.classList.contains("eps-data-row")) {{
+            const nextRow = bodyRows[index + 1];
+            const detailRow = nextRow?.classList.contains("eps-detail-panel-row") ? nextRow : null;
+            currentGroup.pairs.push({{ row, detailRow, index: currentGroup.pairs.length }});
+            if (detailRow) {{
+              index += 1;
+            }}
+            continue;
+          }}
+          if (row.classList.contains("eps-detail-panel-row")) {{
+            continue;
+          }}
+          currentGroup.extras.push(row);
+        }}
+        return groups.filter((group) => group.header || group.pairs.length || group.extras.length);
+      }};
+
+      const renderSortedTable = (table, columnIndex, sortType, direction) => {{
+        const tbody = table.tBodies[0];
+        if (!tbody) {{
+          return;
+        }}
+        const fragment = document.createDocumentFragment();
+        getSortableGroups(tbody).forEach((group) => {{
+          if (group.header) {{
+            fragment.appendChild(group.header);
+          }}
+          const sortedPairs = [...group.pairs].sort(comparePairs(columnIndex, sortType, direction));
+          sortedPairs.forEach((pair) => {{
+            fragment.appendChild(pair.row);
+            if (pair.detailRow) {{
+              fragment.appendChild(pair.detailRow);
+            }}
+          }});
+          group.extras.forEach((row) => fragment.appendChild(row));
+        }});
+        tbody.appendChild(fragment);
+      }};
+
+      sortableTables.forEach((table) => {{
+        const headerButtons = Array.from(table.querySelectorAll("thead .sort-button"));
+        headerButtons.forEach((button, columnIndex) => {{
+          button.addEventListener("click", () => {{
+            const sortType = button.dataset.sortType || "text";
+            const nextDirection = (
+              table.dataset.sortColumn === String(columnIndex)
+              && table.dataset.sortDirection === "asc"
+            ) ? "desc" : "asc";
+
+            table.dataset.sortColumn = String(columnIndex);
+            table.dataset.sortDirection = nextDirection;
+            headerButtons.forEach((otherButton) => {{
+              const th = otherButton.closest("th");
+              th?.setAttribute("aria-sort", "none");
+            }});
+            button.closest("th")?.setAttribute(
+              "aria-sort",
+              nextDirection === "asc" ? "ascending" : "descending",
+            );
+            renderSortedTable(table, columnIndex, sortType, nextDirection);
+          }});
         }});
       }});
     }})();
