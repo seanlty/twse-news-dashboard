@@ -493,12 +493,22 @@ def test_seed_persistent_cache_files_copies_only_missing_launch_caches(tmp_path:
     seeded_paths = main_module.seed_persistent_cache_files(target_raw, source_raw)
 
     assert target_raw / "material_info_2026-06-01_2026-06-27.json" in seeded_paths
+    assert target_raw / "material_info_2026-06-01_2026-06-27_financial_self_report.json" in seeded_paths
     assert existing_monthly not in seeded_paths
     assert (target_raw / "material_info_2026-06-01_2026-06-27.json").exists()
-    assert not (target_raw / "material_info_2026-06-01_2026-06-27_financial_self_report.json").exists()
+    assert (target_raw / "material_info_2026-06-01_2026-06-27_financial_self_report.json").exists()
     assert main_module.json.loads(existing_monthly.read_text(encoding="utf-8")) == [
         {"company_id": "existing"}
     ]
+
+
+def test_find_range_cache_file_accepts_self_report_seed(tmp_path: Path) -> None:
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    seed_file = raw_dir / "material_info_2026-06-01_2026-06-27_financial_self_report.json"
+    save_records([{"company_id": "3163"}], seed_file)
+
+    assert main_module.find_range_cache_file(raw_dir) == seed_file
 
 
 def test_update_monthly_revenue_summary_uses_dynamic_previous_month(

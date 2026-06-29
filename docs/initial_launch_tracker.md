@@ -18,7 +18,7 @@ Set these on Zeabur:
 HOST=0.0.0.0
 PORT=<platform-port>
 TWSE_DASHBOARD_DATA_ROOT=/data
-TWSE_DASHBOARD_RANGE_CACHE_FILE=/data/raw/material_info_2026-06-01_2026-06-27.json
+TWSE_DASHBOARD_RANGE_CACHE_FILE=/data/raw/material_info_2026-06-01_2026-06-27_financial_self_report.json
 TWSE_DASHBOARD_MONTHLY_REVENUE_CACHE_FILE=/data/raw/monthly_revenue_latest.json
 TWSE_DASHBOARD_UPDATE_MIN_INTERVAL=300
 TWSE_DASHBOARD_UPDATE_TOKEN=<secret-token>
@@ -42,6 +42,7 @@ TWSE_DASHBOARD_UPDATE_TOKEN=<same-secret-token-as-zeabur>
 | Zeabur persistent cache path | Done | Production defaults now write to `/data/raw/...`; `TWSE_DASHBOARD_DATA_ROOT` can override the root. |
 | Zeabur Volume mount | Manual | Mount a Zeabur Volume at `/data` before enabling the scheduler. |
 | Initial cache seed | Done | Startup seed copies missing bundled `data/raw/material_info_*.json` and `data/raw/monthly_revenue_latest.json` into `/data/raw`. |
+| Seed cache tracked by Git | Done | `.gitignore` allows the self-report seed JSON and monthly revenue seed JSON into Git/Docker image. |
 | Seed overwrite protection | Done | Startup seed does not overwrite existing `/data/raw` cache files. |
 | GitHub secrets | Manual | Add `TWSE_DASHBOARD_BASE_URL` and `TWSE_DASHBOARD_UPDATE_TOKEN`. |
 | First live update verification | Todo | Manually run the workflow and confirm both update endpoints return `ok: true` or cooldown `skipped: true`. |
@@ -69,12 +70,12 @@ Authorization: Bearer <TWSE_DASHBOARD_UPDATE_TOKEN>
 
 Bundled repo seed files:
 
-- `data/raw/material_info_*.json`, excluding `*_financial_self_report.json`
+- `data/raw/material_info_2026-06-01_2026-06-27_financial_self_report.json`
 - `data/raw/monthly_revenue_latest.json`
 
 Runtime target files:
 
-- `/data/raw/material_info_*.json`
+- `/data/raw/material_info_2026-06-01_2026-06-27_financial_self_report.json`
 - `/data/raw/monthly_revenue_latest.json`
 
 The seed is intentionally one-way and non-destructive:

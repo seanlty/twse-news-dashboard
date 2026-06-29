@@ -29,7 +29,7 @@ Recommended environment variables:
 HOST=0.0.0.0
 PORT=<platform-port>
 TWSE_DASHBOARD_DATA_ROOT=/data
-TWSE_DASHBOARD_RANGE_CACHE_FILE=/data/raw/material_info_2026-06-01_2026-06-27.json
+TWSE_DASHBOARD_RANGE_CACHE_FILE=/data/raw/material_info_2026-06-01_2026-06-27_financial_self_report.json
 TWSE_DASHBOARD_MONTHLY_REVENUE_CACHE_FILE=/data/raw/monthly_revenue_latest.json
 TWSE_DASHBOARD_RECENT_DAYS=7
 TWSE_DASHBOARD_UPDATE_MIN_INTERVAL=300
@@ -134,7 +134,7 @@ This keeps the page from opening empty while waiting for the first live update.
 
 The initial deployment seed should include:
 
-- a self-reported EPS/material-info range cache, for example `data/raw/material_info_2026-06-01_2026-06-27.json`
+- a self-reported EPS/material-info range cache, for example `data/raw/material_info_2026-06-01_2026-06-27_financial_self_report.json`
 - `data/raw/monthly_revenue_latest.json`
 
 After Zeabur Volume is mounted at `/data`, these seed files should exist under `/data/raw` after first boot.
