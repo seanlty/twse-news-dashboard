@@ -28,29 +28,54 @@ from mops_crawler import save_records  # noqa: E402
 
 
 class FakeCrawler:
-    def fetch_latest_with_details(self, max_items: int = 0) -> list[dict]:
-        return [
-            {
-                "company_id": "3163",
-                "company_name": "波若威",
-                "spoke_date": "2026-06-26",
-                "spoke_time": "16:06:00",
-                "subject": "公告本公司115年5月份自結合併損益",
-                "detail_payload": {"TYPEK": "otc"},
-                "detail": {
-                    "fields": {},
-                    "description": """
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    def fetch_latest_with_details(self, max_items: int = 0, market: str = "all") -> list[dict]:
+        self.calls.append({"max_items": max_items, "market": market})
+        records_by_market = {
+            "sii": [
+                {
+                    "company_id": "2017",
+                    "company_name": "官田鋼",
+                    "spoke_date": "2026-06-29",
+                    "spoke_time": "14:46:58",
+                    "subject": "公告本公司115年5月自結合併損益",
+                    "detail_payload": {"TYPEK": "sii"},
+                    "detail": {
+                        "fields": {},
+                        "description": """
+期間              (月)                 (累計)
+                  115年05月            115年1-5月
+每股盈餘           -0.05               -0.19
+""",
+                    },
+                }
+            ],
+            "otc": [
+                {
+                    "company_id": "3163",
+                    "company_name": "波若威",
+                    "spoke_date": "2026-06-26",
+                    "spoke_time": "16:06:00",
+                    "subject": "公告本公司115年5月份自結合併損益",
+                    "detail_payload": {"TYPEK": "otc"},
+                    "detail": {
+                        "fields": {},
+                        "description": """
 期間              (月)                 (季)              (最近四季累計)
                   115年05月            115年第1季         114年第2季至115年第1季
 每股盈餘           0.02      102.33%    3.03    64.76%    5.52
 """,
-                },
-            }
-        ]
+                    },
+                }
+            ],
+        }
+        return records_by_market.get(market, records_by_market["otc"])
 
 
 class FailingCrawler:
-    def fetch_latest_with_details(self, max_items: int = 0) -> list[dict]:
+    def fetch_latest_with_details(self, max_items: int = 0, market: str = "all") -> list[dict]:
         raise AssertionError("monthly revenue tab should not fetch material information")
 
 
@@ -615,12 +640,29 @@ def test_update_latest_cache_merges_and_persists_eps_metrics(tmp_path: Path) -> 
 每股盈餘           -0.15               -0.08
 """,
                 },
-            }
+            },
+            {
+                "company_id": "2017",
+                "company_name": "官田鋼",
+                "spoke_date": "2026-06-29",
+                "spoke_time": "14:46:58",
+                "subject": "公告本公司115年5月自結合併損益",
+                "detail_payload": {"TYPEK": "all"},
+                "detail": {
+                    "fields": {},
+                    "description": """
+期間              (月)                 (累計)
+                  115年05月            115年1-5月
+每股盈餘           -0.05               -0.19
+""",
+                },
+            },
         ],
         cache_file,
     )
+    crawler = FakeCrawler()
     dashboard = DashboardServer(
-        crawler=FakeCrawler(),
+        crawler=crawler,
         max_items=0,
         refresh_seconds=180,
         output_path=DEFAULT_OUTPUT_PATH,
@@ -635,9 +677,17 @@ def test_update_latest_cache_merges_and_persists_eps_metrics(tmp_path: Path) -> 
     records, _ = dashboard._get_recent_financial_records()
 
     assert result["ok"] is True
+    assert result["source"] == "MOPS realtime endpoint (sii+otc)"
+    assert crawler.calls == [
+        {"max_items": 0, "market": "sii"},
+        {"max_items": 0, "market": "otc"},
+    ]
     assert result["new_count"] == 1
-    assert {record["company_id"] for record in records} == {"1435", "3163"}
+    assert {record["company_id"] for record in records} == {"1435", "2017", "3163"}
     assert all(record["eps_metrics"]["has_eps"] for record in records)
+    saved_records = dashboard._load_offline_records(cache_file)
+    saved_2017 = next(record for record in saved_records if record["company_id"] == "2017")
+    assert saved_2017["detail_payload"]["TYPEK"] == "sii"
 
 
 def test_update_request_requires_token_by_default(monkeypatch) -> None:

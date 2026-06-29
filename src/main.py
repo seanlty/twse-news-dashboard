@@ -2381,6 +2381,17 @@ class DashboardServer:
             "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
 
+    def _fetch_latest_listed_otc_records(self) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+        for market in ("sii", "otc"):
+            records.extend(
+                self.crawler.fetch_latest_with_details(
+                    max_items=self.max_items,
+                    market=market,
+                )
+            )
+        return sort_records_by_spoke_time(dedupe_records(records))
+
     def update_latest_cache(self) -> dict[str, Any]:
         """Fetch realtime rows and merge them into the persistent range cache."""
         now = time.monotonic()
@@ -2402,7 +2413,7 @@ class DashboardServer:
         existing_records = enrich_records_for_cache(existing_records)
         before_count = len(dedupe_records(existing_records))
 
-        latest_records = self.crawler.fetch_latest_with_details(max_items=self.max_items)
+        latest_records = self._fetch_latest_listed_otc_records()
         latest_records = enrich_records_for_cache(latest_records)
         merged_records = sort_records_by_spoke_time(
             dedupe_records([*latest_records, *existing_records])
@@ -2417,7 +2428,7 @@ class DashboardServer:
         result = {
             "ok": True,
             "skipped": False,
-            "source": "MOPS realtime endpoint",
+            "source": "MOPS realtime endpoint (sii+otc)",
             "cache_file": str(cache_file),
             "fetched_count": len(latest_records),
             "before_count": before_count,
