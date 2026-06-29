@@ -513,6 +513,7 @@ def test_dashboard_cache_defaults_use_persistent_data_root(monkeypatch, tmp_path
 
     assert main_module.DEFAULT_OUTPUT_PATH.as_posix() == "/data/raw/latest_material_info.json"
     assert main_module.DEFAULT_RANGE_OUTPUT_PATH.as_posix() == "/data/raw/material_info_range.json"
+    assert main_module.DEFAULT_RANGE_META_PATH.as_posix() == "/data/raw/material_info_range_meta.json"
     assert (
         main_module.DEFAULT_MONTHLY_REVENUE_OUTPUT_PATH.as_posix()
         == "/data/raw/monthly_revenue_latest.json"
@@ -523,13 +524,14 @@ def test_dashboard_cache_defaults_use_persistent_data_root(monkeypatch, tmp_path
 
     assert main_module.dashboard_raw_data_dir() == custom_root / "raw"
     assert main_module.default_range_output_path() == custom_root / "raw" / "material_info_range.json"
+    assert main_module.default_range_meta_path() == custom_root / "raw" / "material_info_range_meta.json"
     assert (
         main_module.default_monthly_revenue_output_path()
         == custom_root / "raw" / "monthly_revenue_latest.json"
     )
 
 
-def test_seed_persistent_cache_files_copies_only_missing_launch_caches(tmp_path: Path) -> None:
+def test_seed_persistent_cache_files_promotes_existing_seed_to_active_cache(tmp_path: Path) -> None:
     source_raw = tmp_path / "repo" / "data" / "raw"
     target_raw = tmp_path / "volume" / "raw"
     source_raw.mkdir(parents=True)
@@ -540,27 +542,38 @@ def test_seed_persistent_cache_files_copies_only_missing_launch_caches(tmp_path:
         source_raw / "material_info_2026-06-01_2026-06-27_financial_self_report.json",
     )
     target_raw.mkdir(parents=True)
+    existing_seed = target_raw / "material_info_2026-06-01_2026-06-27_financial_self_report.json"
+    save_records([{"company_id": "live"}], existing_seed)
     existing_monthly = target_raw / "monthly_revenue_latest.json"
     save_records([{"company_id": "existing"}], existing_monthly)
 
     seeded_paths = main_module.seed_persistent_cache_files(target_raw, source_raw)
+    active_cache = target_raw / "material_info_range.json"
+    meta_path = target_raw / "material_info_range_meta.json"
 
-    assert target_raw / "material_info_2026-06-01_2026-06-27.json" in seeded_paths
-    assert target_raw / "material_info_2026-06-01_2026-06-27_financial_self_report.json" in seeded_paths
+    assert active_cache in seeded_paths
+    assert meta_path in seeded_paths
     assert existing_monthly not in seeded_paths
-    assert (target_raw / "material_info_2026-06-01_2026-06-27.json").exists()
-    assert (target_raw / "material_info_2026-06-01_2026-06-27_financial_self_report.json").exists()
+    assert main_module.json.loads(active_cache.read_text(encoding="utf-8")) == [{"company_id": "live"}]
+    meta = main_module.json.loads(meta_path.read_text(encoding="utf-8"))
+    assert meta["cache_file"] == str(active_cache)
+    assert meta["seed_file"] == str(existing_seed)
+    assert meta["record_count"] == 1
     assert main_module.json.loads(existing_monthly.read_text(encoding="utf-8")) == [
         {"company_id": "existing"}
     ]
 
 
-def test_find_range_cache_file_accepts_self_report_seed(tmp_path: Path) -> None:
+def test_find_range_cache_file_prefers_active_cache_and_falls_back_to_seed(tmp_path: Path) -> None:
     raw_dir = tmp_path / "raw"
     raw_dir.mkdir()
     seed_file = raw_dir / "material_info_2026-06-01_2026-06-27_financial_self_report.json"
     save_records([{"company_id": "3163"}], seed_file)
+    active_cache = raw_dir / "material_info_range.json"
+    save_records([{"company_id": "active"}], active_cache)
 
+    assert main_module.find_range_cache_file(raw_dir) == active_cache
+    active_cache.unlink()
     assert main_module.find_range_cache_file(raw_dir) == seed_file
 
 
@@ -702,10 +715,11 @@ def test_update_latest_cache_merges_and_persists_eps_metrics(tmp_path: Path) -> 
     )
 
     result = dashboard.update_latest_cache()
-    records, _ = dashboard._get_recent_financial_records()
+    records, source = dashboard._get_recent_financial_records()
 
     assert result["ok"] is True
     assert result["source"] == "MOPS realtime endpoint (sii+otc)"
+    assert result["meta_file"] == str(main_module.range_cache_meta_path(cache_file))
     assert crawler.calls == [
         {"max_items": 0, "market": "sii"},
         {"max_items": 0, "market": "otc"},
@@ -719,6 +733,13 @@ def test_update_latest_cache_merges_and_persists_eps_metrics(tmp_path: Path) -> 
     saved_records = dashboard._load_offline_records(cache_file)
     saved_2017 = next(record for record in saved_records if record["company_id"] == "2017")
     assert saved_2017["detail_payload"]["TYPEK"] == "sii"
+    meta = main_module.load_range_cache_meta(cache_file)
+    assert meta["last_error"] is None
+    assert meta["last_success_at"] == result["updated_at"]
+    assert meta["record_count"] == len(saved_records)
+    assert meta["newest_spoke_at"].startswith("2026-06-29T15:02:29")
+    assert "MOPS 即時重大訊息 + 持久化快取" in source
+    assert "range cache:" not in source
 
 
 def test_update_request_requires_token_by_default(monkeypatch) -> None:

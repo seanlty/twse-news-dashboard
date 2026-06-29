@@ -78,7 +78,9 @@ For Zeabur, mount a Volume at:
 
 The app defaults to `/data/raw/...` for production cache files. Keep update endpoints writing to this mounted path instead of repo-relative `./data` or `./cache` paths, because the default service filesystem is stateless and can reset on restart or redeploy.
 
-On first boot, `python src/main.py serve` seeds missing launch cache files from the bundled repo `data/raw` folder into `/data/raw`. This startup seed only copies files that are missing; it does not overwrite cache files already updated by the scheduler.
+For material-info/self-report data, the active cache is `/data/raw/material_info_range.json` and the lifecycle metadata file is `/data/raw/material_info_range_meta.json`. On first boot, `python src/main.py serve` promotes an existing legacy `/data/raw/material_info_*.json` file into the active cache when present; otherwise it seeds the active cache from the bundled repo `data/raw` folder. This preserves already-updated Zeabur volume data while moving the page away from date-stamped seed filenames.
+
+The metadata file records seed/update lifecycle fields such as `seeded_at`, `last_success_at`, `last_error`, `record_count`, and `newest_spoke_at`. The page header should describe source/update state from metadata, not infer freshness from the cache filename.
 
 Seed behavior can be disabled with:
 
@@ -136,5 +138,7 @@ The initial deployment seed should include:
 
 - a self-reported EPS/material-info range cache, for example `data/raw/material_info_2026-06-01_2026-06-27_financial_self_report.json`
 - `data/raw/monthly_revenue_latest.json`
+
+At runtime the material-info seed is copied/promoted into `/data/raw/material_info_range.json`; the original dated seed filename is not used as the long-lived active cache identity.
 
 After Zeabur Volume is mounted at `/data`, these seed files should exist under `/data/raw` after first boot.

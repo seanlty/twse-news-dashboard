@@ -882,9 +882,11 @@ class MopsCrawler:
 
 
 def save_records(records: list[dict[str, Any]], output_path: Path) -> None:
-    """Save crawled records as UTF-8 JSON."""
+    """Save crawled records as UTF-8 JSON with an atomic replace."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(
+    temp_path = output_path.with_name(f"{output_path.name}.tmp")
+    temp_path.write_text(
         json.dumps(records, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+    temp_path.replace(output_path)

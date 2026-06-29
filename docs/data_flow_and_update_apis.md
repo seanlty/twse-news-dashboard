@@ -16,7 +16,7 @@ This note records the current dashboard data path, update endpoints, cache files
 Current display flow:
 
 1. `DashboardServer.get_records()` routes `MODE_RECENT_FINANCIAL` to `_get_recent_financial_records()`.
-2. `_get_recent_financial_records()` loads the range cache from `TWSE_DASHBOARD_RANGE_CACHE_FILE`, or the newest `/data/raw/material_info_*.json` file.
+2. `_get_recent_financial_records()` loads the active range cache from `TWSE_DASHBOARD_RANGE_CACHE_FILE`, or `/data/raw/material_info_range.json`.
 3. Records are filtered to recent days, listed/OTC markets, and recent-financial candidates: self-reported EPS, attention-trading financial/EPS disclosures, or self-reported profit/loss disclosures without EPS.
 4. Rows are split into `市場未反映` and `歷史公告` by the latest completed market close date.
 5. The tab title area shows latest announcement time from the newest record in the rendered dataset.
@@ -26,12 +26,13 @@ Update API:
 - `POST /api/admin/update`
 - Auth: `Authorization: Bearer <TWSE_DASHBOARD_UPDATE_TOKEN>`
 - Cooldown: `TWSE_DASHBOARD_UPDATE_MIN_INTERVAL`, default `300` seconds.
-- Behavior: fetch realtime MOPS rows, enrich EPS/category fields, merge into the persistent range cache, then invalidate the recent-financial memory cache.
+- Behavior: fetch realtime MOPS rows, enrich category/EPS/signal fields, merge into the active persistent range cache, write lifecycle metadata, then invalidate the recent-financial memory cache.
 
 Primary cache:
 
 - `TWSE_DASHBOARD_RANGE_CACHE_FILE`
-- Default fallback: newest `/data/raw/material_info_*.json`, or `/data/raw/material_info_range.json`.
+- Default active cache: `/data/raw/material_info_range.json`.
+- Metadata: `/data/raw/material_info_range_meta.json`, with `seeded_at`, `last_success_at`, `last_error`, `record_count`, and `newest_spoke_at`.
 
 ## Monthly Revenue Tab
 
@@ -88,7 +89,7 @@ Current limitation:
 
 - `TWSE_DASHBOARD_UPDATE_TOKEN`: required for update endpoints in production.
 - `TWSE_DASHBOARD_DATA_ROOT`: persistent cache root. Default is `/data`.
-- `TWSE_DASHBOARD_RANGE_CACHE_FILE`: self-reported EPS range cache path.
+- `TWSE_DASHBOARD_RANGE_CACHE_FILE`: active self-reported/attention financial range cache path.
 - `TWSE_DASHBOARD_MONTHLY_REVENUE_CACHE_FILE`: monthly revenue cache path.
 - `TWSE_DASHBOARD_UPDATE_MIN_INTERVAL`: update cooldown seconds.
 - `TWSE_DASHBOARD_RECENT_DAYS`: self-reported EPS lookback window.
@@ -99,7 +100,7 @@ Current limitation:
 
 | Area | Status | Notes |
 | --- | --- | --- |
-| Self-reported EPS update API | Done | `/api/admin/update` merges realtime MOPS rows into range cache. |
+| Self-reported/attention financial update API | Done | `/api/admin/update` merges realtime MOPS rows into active cache and updates metadata. |
 | Monthly revenue update API | Done | `/api/admin/update-monthly-revenue` updates newest target month with TWSE/TPEX fallbacks. |
 | Monthly revenue newest-period display | Done | Page shows only the newest available revenue period. |
 | Trading-day market reaction split | Done | Uses FinMind trading calendar when available, weekday fallback otherwise. |

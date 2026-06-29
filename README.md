@@ -114,7 +114,7 @@ curl -X POST http://127.0.0.1:8000/api/admin/update -H "Authorization: Bearer de
 curl -X POST https://your-domain.example/api/admin/update -H "Authorization: Bearer <token>"
 ```
 
-這個路徑會抓取公開資訊觀測站即時重大訊息、合併到 range cache、寫回 `eps_metrics`，並有 300 秒 cooldown 避免短時間重複爬取。可用 `--update-min-interval` 調整 cooldown 秒數。
+這個路徑會抓取公開資訊觀測站即時重大訊息、合併到 active range cache `/data/raw/material_info_range.json`、更新 `/data/raw/material_info_range_meta.json` 生命週期資訊，並有 300 秒 cooldown 避免短時間重複爬取。可用 `--update-min-interval` 調整 cooldown 秒數。
 
 若只是本機開發測試、且刻意不設定 token，可加 `--allow-unprotected-local-update`；production 不要使用這個選項。
 
