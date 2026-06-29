@@ -16,7 +16,7 @@ This note records the current dashboard data path, update endpoints, cache files
 Current display flow:
 
 1. `DashboardServer.get_records()` routes `MODE_RECENT_FINANCIAL` to `_get_recent_financial_records()`.
-2. `_get_recent_financial_records()` loads the range cache from `TWSE_DASHBOARD_RANGE_CACHE_FILE`, or the newest `data/raw/material_info_*.json` file.
+2. `_get_recent_financial_records()` loads the range cache from `TWSE_DASHBOARD_RANGE_CACHE_FILE`, or the newest `/data/raw/material_info_*.json` file.
 3. Records are filtered to recent days, `CATEGORY_FINANCIAL_SELF_REPORT`, listed/OTC markets, and rows with EPS metrics.
 4. Rows are split into `市場未反映` and `歷史公告` by the latest completed market close date.
 5. The tab title area shows latest announcement time from the newest record in the rendered dataset.
@@ -31,13 +31,13 @@ Update API:
 Primary cache:
 
 - `TWSE_DASHBOARD_RANGE_CACHE_FILE`
-- Default fallback: newest `data/raw/material_info_*.json`, or `data/raw/material_info_range.json`.
+- Default fallback: newest `/data/raw/material_info_*.json`, or `/data/raw/material_info_range.json`.
 
 ## Monthly Revenue Tab
 
 Current display flow:
 
-1. `DashboardServer._get_monthly_revenue_records()` loads `data/raw/monthly_revenue_latest.json` or `TWSE_DASHBOARD_MONTHLY_REVENUE_CACHE_FILE`.
+1. `DashboardServer._get_monthly_revenue_records()` loads `/data/raw/monthly_revenue_latest.json` or `TWSE_DASHBOARD_MONTHLY_REVENUE_CACHE_FILE`.
 2. The page keeps only monthly revenue records and selects the newest available revenue period.
 3. Before a new period appears, the newest complete previous period remains visible.
 4. After any newer-period row appears, only that newer period is displayed.
@@ -61,7 +61,7 @@ Source priority:
 Primary cache:
 
 - `TWSE_DASHBOARD_MONTHLY_REVENUE_CACHE_FILE`
-- Default: `data/raw/monthly_revenue_latest.json`
+- Default: `/data/raw/monthly_revenue_latest.json`
 
 ## Financial Report Tab
 
@@ -87,10 +87,12 @@ Current limitation:
 ## Environment Variables
 
 - `TWSE_DASHBOARD_UPDATE_TOKEN`: required for update endpoints in production.
+- `TWSE_DASHBOARD_DATA_ROOT`: persistent cache root. Default is `/data`.
 - `TWSE_DASHBOARD_RANGE_CACHE_FILE`: self-reported EPS range cache path.
 - `TWSE_DASHBOARD_MONTHLY_REVENUE_CACHE_FILE`: monthly revenue cache path.
 - `TWSE_DASHBOARD_UPDATE_MIN_INTERVAL`: update cooldown seconds.
 - `TWSE_DASHBOARD_RECENT_DAYS`: self-reported EPS lookback window.
+- `TWSE_DASHBOARD_SEED_CACHE_ON_START`: set `0` to disable startup seed from bundled repo cache files.
 - `FINMIND_TOKEN` or `FINMIND_API_TOKEN`: FinMind trading calendar token for market-close classification.
 
 ## Update Progress
@@ -102,5 +104,8 @@ Current limitation:
 | Monthly revenue newest-period display | Done | Page shows only the newest available revenue period. |
 | Trading-day market reaction split | Done | Uses FinMind trading calendar when available, weekday fallback otherwise. |
 | Sortable tables | Done | All three tab tables support local grouped sorting. |
+| Zeabur persistent cache defaults | Done | Production defaults write cache files under `/data/raw`. |
+| Initial launch cache seed | Done | Startup seed copies missing bundled range/monthly caches into `/data/raw`. |
 | Financial report dedicated update/cache | Todo | Needs a separate endpoint/cache if the financial report tab must update independently. |
-| Deployment scheduler | Todo | Configure production cron/GitHub Actions for both update endpoints. |
+| Deployment scheduler workflow | Done | `.github/workflows/dashboard-update.yml` calls both update endpoints. |
+| Production scheduler activation | Todo | Add GitHub secrets and confirm workflow runs on the default branch. |

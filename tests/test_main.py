@@ -455,6 +455,52 @@ def test_fetch_finmind_trading_dates_uses_taiwan_stock_trading_date(monkeypatch)
     assert captured["timeout"] == 10
 
 
+def test_dashboard_cache_defaults_use_persistent_data_root(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.delenv(main_module.DATA_ROOT_ENV, raising=False)
+
+    assert main_module.DEFAULT_OUTPUT_PATH.as_posix() == "/data/raw/latest_material_info.json"
+    assert main_module.DEFAULT_RANGE_OUTPUT_PATH.as_posix() == "/data/raw/material_info_range.json"
+    assert (
+        main_module.DEFAULT_MONTHLY_REVENUE_OUTPUT_PATH.as_posix()
+        == "/data/raw/monthly_revenue_latest.json"
+    )
+
+    custom_root = tmp_path / "volume"
+    monkeypatch.setenv(main_module.DATA_ROOT_ENV, str(custom_root))
+
+    assert main_module.dashboard_raw_data_dir() == custom_root / "raw"
+    assert main_module.default_range_output_path() == custom_root / "raw" / "material_info_range.json"
+    assert (
+        main_module.default_monthly_revenue_output_path()
+        == custom_root / "raw" / "monthly_revenue_latest.json"
+    )
+
+
+def test_seed_persistent_cache_files_copies_only_missing_launch_caches(tmp_path: Path) -> None:
+    source_raw = tmp_path / "repo" / "data" / "raw"
+    target_raw = tmp_path / "volume" / "raw"
+    source_raw.mkdir(parents=True)
+    save_records([{"company_id": "1111"}], source_raw / "material_info_2026-06-01_2026-06-27.json")
+    save_records([{"company_id": "2222"}], source_raw / "monthly_revenue_latest.json")
+    save_records(
+        [{"company_id": "3333"}],
+        source_raw / "material_info_2026-06-01_2026-06-27_financial_self_report.json",
+    )
+    target_raw.mkdir(parents=True)
+    existing_monthly = target_raw / "monthly_revenue_latest.json"
+    save_records([{"company_id": "existing"}], existing_monthly)
+
+    seeded_paths = main_module.seed_persistent_cache_files(target_raw, source_raw)
+
+    assert target_raw / "material_info_2026-06-01_2026-06-27.json" in seeded_paths
+    assert existing_monthly not in seeded_paths
+    assert (target_raw / "material_info_2026-06-01_2026-06-27.json").exists()
+    assert not (target_raw / "material_info_2026-06-01_2026-06-27_financial_self_report.json").exists()
+    assert main_module.json.loads(existing_monthly.read_text(encoding="utf-8")) == [
+        {"company_id": "existing"}
+    ]
+
+
 def test_update_monthly_revenue_summary_uses_dynamic_previous_month(
     tmp_path: Path,
     monkeypatch,

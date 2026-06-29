@@ -28,10 +28,13 @@ Recommended environment variables:
 ```text
 HOST=0.0.0.0
 PORT=<platform-port>
-TWSE_DASHBOARD_RANGE_CACHE_FILE=data/raw/material_info_2026-06-01_2026-06-27.json
+TWSE_DASHBOARD_DATA_ROOT=/data
+TWSE_DASHBOARD_RANGE_CACHE_FILE=/data/raw/material_info_2026-06-01_2026-06-27.json
+TWSE_DASHBOARD_MONTHLY_REVENUE_CACHE_FILE=/data/raw/monthly_revenue_latest.json
 TWSE_DASHBOARD_RECENT_DAYS=7
 TWSE_DASHBOARD_UPDATE_MIN_INTERVAL=300
 TWSE_DASHBOARD_UPDATE_TOKEN=<secret-token>
+FINMIND_TOKEN=<secret-token>
 ```
 
 The `serve` command reads these environment variables as defaults:
@@ -53,6 +56,24 @@ The current stable production direction is:
 7. Verify the deployed page has data before enabling the scheduler.
 
 This avoids an empty first page while the app is waiting for the first live crawl.
+
+## Zeabur persistent cache
+
+For Zeabur, mount a Volume at:
+
+```text
+/data
+```
+
+The app defaults to `/data/raw/...` for production cache files. Keep update endpoints writing to this mounted path instead of repo-relative `./data` or `./cache` paths, because the default service filesystem is stateless and can reset on restart or redeploy.
+
+On first boot, `python src/main.py serve` seeds missing launch cache files from the bundled repo `data/raw` folder into `/data/raw`. This startup seed only copies files that are missing; it does not overwrite cache files already updated by the scheduler.
+
+Seed behavior can be disabled with:
+
+```text
+TWSE_DASHBOARD_SEED_CACHE_ON_START=0
+```
 
 ## Scheduler reminder
 
@@ -99,3 +120,10 @@ python src/main.py enrich-cache data/raw/material_info_2026-06-01_2026-06-27.jso
 ```
 
 This keeps the page from opening empty while waiting for the first live update.
+
+The initial deployment seed should include:
+
+- a self-reported EPS/material-info range cache, for example `data/raw/material_info_2026-06-01_2026-06-27.json`
+- `data/raw/monthly_revenue_latest.json`
+
+After Zeabur Volume is mounted at `/data`, these seed files should exist under `/data/raw` after first boot.

@@ -1,0 +1,61 @@
+name: Dashboard scheduled updates
+
+on:
+  schedule:
+    - cron: "*/5 23,0-15 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: dashboard-scheduled-updates
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    env:
+      DASHBOARD_BASE_URL: ${{ secrets.TWSE_DASHBOARD_BASE_URL }}
+      UPDATE_TOKEN: ${{ secrets.TWSE_DASHBOARD_UPDATE_TOKEN }}
+
+    steps:
+      - name: Check Taipei monitoring window
+        id: window
+        shell: python
+        run: |
+          import os
+          from datetime import datetime, time
+          from zoneinfo import ZoneInfo
+
+          now = datetime.now(ZoneInfo("Asia/Taipei"))
+          manual = os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
+          in_window = time(7, 0) <= now.time().replace(tzinfo=None) <= time(23, 0)
+          should_run = manual or in_window
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"should_run={str(should_run).lower()}\n")
+              output.write(f"taipei_now={now.isoformat(timespec='seconds')}\n")
+
+          print(f"taipei_now={now.isoformat(timespec='seconds')}")
+          print(f"should_run={should_run}")
+
+      - name: Validate required secrets
+        if: steps.window.outputs.should_run == 'true'
+        shell: bash
+        run: |
+          test -n "$DASHBOARD_BASE_URL"
+          test -n "$UPDATE_TOKEN"
+
+      - name: Update self-reported EPS cache
+        if: steps.window.outputs.should_run == 'true'
+        shell: bash
+        run: |
+          curl -fsS -X POST \
+            "${DASHBOARD_BASE_URL%/}/api/admin/update" \
+            -H "Authorization: Bearer $UPDATE_TOKEN"
+
+      - name: Update monthly revenue cache
+        if: steps.window.outputs.should_run == 'true'
+        shell: bash
+        run: |
+          curl -fsS -X POST \
+            "${DASHBOARD_BASE_URL%/}/api/admin/update-monthly-revenue" \
+            -H "Authorization: Bearer $UPDATE_TOKEN"
