@@ -5,6 +5,8 @@ from pathlib import Path
 from threading import Thread
 from urllib.request import urlopen
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import main as main_module  # noqa: E402
@@ -260,6 +262,11 @@ class CapturingMonthlyRevenueCrawler:
         return {"records": [], "market_results": []}
 
 
+class FailingMonthlyRevenueCrawler:
+    def fetch_monthly_revenue_summary_with_fallbacks(self, **kwargs) -> dict:
+        raise RuntimeError("monthly source unavailable")
+
+
 def make_dashboard(
     range_cache_file: Path | None = None,
     crawler: object | None = None,
@@ -370,6 +377,8 @@ def test_monthly_revenue_tab_renders_records(tmp_path: Path) -> None:
     assert "本月營收及累計營收較去年同期增加。" in html
     assert "營收期間：2026/04 | 已申報 1 家" in html
     assert "最新申報：05-07 16:00:00" in html
+    assert "營收月份：2026/04" in html
+    assert "最新偵測：05-07 16:00:00" in html
     assert "data-sortable-table" in html
     assert 'data-sort-type="number"' in html
     assert 'class="detail-toggle"' not in html
@@ -518,6 +527,10 @@ def test_dashboard_cache_defaults_use_persistent_data_root(monkeypatch, tmp_path
         main_module.DEFAULT_MONTHLY_REVENUE_OUTPUT_PATH.as_posix()
         == "/data/raw/monthly_revenue_latest.json"
     )
+    assert (
+        main_module.DEFAULT_MONTHLY_REVENUE_META_PATH.as_posix()
+        == "/data/raw/monthly_revenue_latest_meta.json"
+    )
 
     custom_root = tmp_path / "volume"
     monkeypatch.setenv(main_module.DATA_ROOT_ENV, str(custom_root))
@@ -528,6 +541,10 @@ def test_dashboard_cache_defaults_use_persistent_data_root(monkeypatch, tmp_path
     assert (
         main_module.default_monthly_revenue_output_path()
         == custom_root / "raw" / "monthly_revenue_latest.json"
+    )
+    assert (
+        main_module.default_monthly_revenue_meta_path()
+        == custom_root / "raw" / "monthly_revenue_latest_meta.json"
     )
 
 
@@ -550,15 +567,20 @@ def test_seed_persistent_cache_files_promotes_existing_seed_to_active_cache(tmp_
     seeded_paths = main_module.seed_persistent_cache_files(target_raw, source_raw)
     active_cache = target_raw / "material_info_range.json"
     meta_path = target_raw / "material_info_range_meta.json"
+    monthly_meta_path = target_raw / "monthly_revenue_latest_meta.json"
 
     assert active_cache in seeded_paths
     assert meta_path in seeded_paths
     assert existing_monthly not in seeded_paths
+    assert monthly_meta_path in seeded_paths
     assert main_module.json.loads(active_cache.read_text(encoding="utf-8")) == [{"company_id": "live"}]
     meta = main_module.json.loads(meta_path.read_text(encoding="utf-8"))
     assert meta["cache_file"] == str(active_cache)
     assert meta["seed_file"] == str(existing_seed)
     assert meta["record_count"] == 1
+    monthly_meta = main_module.json.loads(monthly_meta_path.read_text(encoding="utf-8"))
+    assert monthly_meta["cache_file"] == str(existing_monthly)
+    assert monthly_meta["record_count"] == 1
     assert main_module.json.loads(existing_monthly.read_text(encoding="utf-8")) == [
         {"company_id": "existing"}
     ]
@@ -594,7 +616,8 @@ def test_update_monthly_revenue_summary_uses_dynamic_previous_month(
     assert capturing_crawler.calls[0]["roc_year"] == 115
     assert capturing_crawler.calls[0]["month"] == 6
     assert result["data_month"] == "115/06"
-    assert result["display_data_month"] == "2026/06"
+    assert result["target_display_data_month"] == "2026/06"
+    assert result["display_data_month"] == ""
 
 
 def test_update_monthly_revenue_summary_skips_fallback_when_mops_primary_exists(tmp_path: Path) -> None:
@@ -628,6 +651,10 @@ def test_update_monthly_revenue_summary_skips_fallback_when_mops_primary_exists(
     records = dashboard._load_offline_records(monthly_cache)
 
     assert result["ok"] is True
+    assert result["meta_file"] == str(main_module.monthly_revenue_cache_meta_path(monthly_cache))
+    assert result["target_display_data_month"] == "2026/05"
+    assert result["display_data_month"] == "2026/05"
+    assert "營收月份：2026/05" in result["source"]
     assert result["fallback_skipped_existing_primary_count"] == 1
     assert result["new_count"] == 1
     assert {record["company_id"] for record in records} == {"4739", "9999"}
@@ -636,6 +663,55 @@ def test_update_monthly_revenue_summary_skips_fallback_when_mops_primary_exists(
         for record in records
         if record["company_id"] == "4739" and record["source_type"] == "tpex_openapi_monthly_revenue"
     ] == []
+    meta = main_module.load_monthly_revenue_cache_meta(monthly_cache)
+    assert meta["target_data_month"] == "115/05"
+    assert meta["target_display_data_month"] == "2026/05"
+    assert meta["display_data_month"] == "2026/05"
+    assert meta["display_record_count"] == 2
+    assert meta["market_failure_count"] == 0
+    assert meta["last_error"] is None
+    assert meta["newest_detected_at"].startswith("2026-06-28T20:05:00")
+
+
+def test_update_monthly_revenue_summary_records_failure_in_meta(tmp_path: Path) -> None:
+    monthly_cache = tmp_path / "monthly-cache.json"
+    save_records(
+        [
+            {
+                "source_type": "mops_monthly_revenue_summary",
+                "source_label": "上市月營收彙總",
+                "event_type": "monthly_revenue",
+                "market": "sii",
+                "company_id": "1111",
+                "company_name": "舊資料",
+                "title": "1111 舊資料 115/05 月營收",
+                "detected_at": "2026-06-12T19:04:29+08:00",
+                "event_time": "2026-06-12T19:04:29+08:00",
+                "data_month": "115/05",
+                "monthly_revenue": "100000",
+            }
+        ],
+        monthly_cache,
+    )
+    dashboard = make_dashboard(
+        monthly_revenue_crawler=FailingMonthlyRevenueCrawler(),
+        monthly_revenue_output_path=monthly_cache,
+        monthly_revenue_roc_year=115,
+        monthly_revenue_month=6,
+    )
+
+    with pytest.raises(RuntimeError):
+        dashboard.update_monthly_revenue_summary_cache()
+
+    meta = main_module.load_monthly_revenue_cache_meta(monthly_cache)
+    assert meta["target_data_month"] == "115/06"
+    assert meta["target_display_data_month"] == "2026/06"
+    assert meta["display_data_month"] == "2026/05"
+    assert meta["display_record_count"] == 1
+    assert meta["degraded"] is True
+    assert meta["last_error"] == "RuntimeError: monthly source unavailable"
+    assert "last_failed_at" in meta
+    assert main_module.json.loads(monthly_cache.read_text(encoding="utf-8"))[0]["company_id"] == "1111"
 
 
 def test_financial_report_tab_renders_financial_records(tmp_path: Path) -> None:

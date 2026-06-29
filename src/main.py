@@ -62,6 +62,7 @@ DEFAULT_PREVIOUS_OUTPUT_PATH = DEFAULT_RAW_DATA_DIR / "previous_material_info.js
 DEFAULT_RANGE_OUTPUT_PATH = DEFAULT_RAW_DATA_DIR / "material_info_range.json"
 DEFAULT_RANGE_META_PATH = DEFAULT_RAW_DATA_DIR / "material_info_range_meta.json"
 DEFAULT_MONTHLY_REVENUE_OUTPUT_PATH = DEFAULT_RAW_DATA_DIR / "monthly_revenue_latest.json"
+DEFAULT_MONTHLY_REVENUE_META_PATH = DEFAULT_RAW_DATA_DIR / "monthly_revenue_latest_meta.json"
 DEFAULT_RECENT_DAYS = 7
 MODE_LATEST = "latest"
 MODE_PREVIOUS = "previous"
@@ -154,6 +155,10 @@ def default_range_meta_path() -> Path:
 
 def default_monthly_revenue_output_path() -> Path:
     return dashboard_cache_path("monthly_revenue_latest.json")
+
+
+def default_monthly_revenue_meta_path() -> Path:
+    return dashboard_cache_path("monthly_revenue_latest_meta.json")
 
 
 def env_first(names: tuple[str, ...]) -> str:
@@ -499,6 +504,26 @@ def latest_monthly_revenue_detected_record(records: list[dict[str, Any]]) -> dic
     return max(candidates, key=lambda item: item[0])[1]
 
 
+def newest_monthly_revenue_detected_at_iso(records: list[dict[str, Any]]) -> str:
+    candidates: list[tuple[float, datetime]] = []
+    for record in records:
+        detected_at = str(record.get("detected_at", "")).strip()
+        if not detected_at:
+            continue
+        try:
+            parsed = datetime.fromisoformat(detected_at.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=TAIWAN_TZ)
+        else:
+            parsed = parsed.astimezone(TAIWAN_TZ)
+        candidates.append((parsed.timestamp(), parsed))
+    if not candidates:
+        return ""
+    return max(candidates, key=lambda item: item[0])[1].isoformat(timespec="seconds")
+
+
 def render_monthly_revenue_panel_subtitle(records: list[dict[str, Any]]) -> str:
     period = format_monthly_revenue_period(records[0].get("data_month")) if records else "-"
     latest_record = latest_monthly_revenue_detected_record(records)
@@ -779,6 +804,107 @@ def format_range_cache_source(cache_file: Path, records: list[dict[str, Any]]) -
     return " ｜ ".join(parts)
 
 
+def monthly_revenue_cache_meta_path(cache_file: Path | None = None) -> Path:
+    cache_path = cache_file or default_monthly_revenue_output_path()
+    if cache_path.name == default_monthly_revenue_output_path().name:
+        return cache_path.with_name(default_monthly_revenue_meta_path().name)
+    return cache_path.with_name(f"{cache_path.stem}_meta.json")
+
+
+def load_monthly_revenue_cache_meta(cache_file: Path | None = None) -> dict[str, Any]:
+    meta_path = monthly_revenue_cache_meta_path(cache_file)
+    if not meta_path.exists():
+        return {}
+    try:
+        payload = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def save_monthly_revenue_cache_meta(cache_file: Path, meta: Mapping[str, Any]) -> None:
+    meta_path = monthly_revenue_cache_meta_path(cache_file)
+    meta_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = meta_path.with_name(f"{meta_path.name}.tmp")
+    temp_path.write_text(
+        json.dumps(dict(meta), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    temp_path.replace(meta_path)
+
+
+def build_monthly_revenue_cache_meta(
+    cache_file: Path,
+    records: list[dict[str, Any]],
+    **fields: Any,
+) -> dict[str, Any]:
+    monthly_records = [record for record in records if is_monthly_revenue_record(record)]
+    display_records = select_display_monthly_revenue_records(monthly_records)
+    display_data_month_roc = (
+        normalize_data_month(display_records[0].get("data_month", "")) if display_records else ""
+    )
+    display_data_month = (
+        format_monthly_revenue_period(display_data_month_roc) if display_data_month_roc else ""
+    )
+    meta: dict[str, Any] = {
+        "schema_version": 1,
+        "cache_file": str(cache_file),
+        "source_label": "MOPS 月營收彙總 + OpenAPI fallback + 持久化快取",
+        "record_count": len(records),
+        "monthly_revenue_record_count": len(monthly_records),
+        "display_record_count": len(display_records),
+        "display_data_month": display_data_month,
+        "display_data_month_roc": display_data_month_roc,
+        "newest_detected_at": newest_monthly_revenue_detected_at_iso(monthly_records),
+        "newest_event_at": newest_event_time_iso(monthly_records),
+    }
+    meta.update(fields)
+    return meta
+
+
+def update_monthly_revenue_cache_meta(
+    cache_file: Path,
+    records: list[dict[str, Any]] | None = None,
+    **fields: Any,
+) -> dict[str, Any]:
+    meta = load_monthly_revenue_cache_meta(cache_file)
+    if records is not None:
+        meta.update(build_monthly_revenue_cache_meta(cache_file, records))
+    else:
+        meta.update({"schema_version": 1, "cache_file": str(cache_file)})
+    meta.update(fields)
+    save_monthly_revenue_cache_meta(cache_file, meta)
+    return meta
+
+
+def format_monthly_revenue_cache_source(cache_file: Path, records: list[dict[str, Any]]) -> str:
+    meta = load_monthly_revenue_cache_meta(cache_file)
+    source_label = str(
+        meta.get("source_label") or "MOPS 月營收彙總 + OpenAPI fallback + 持久化快取"
+    )
+    monthly_records = [record for record in records if is_monthly_revenue_record(record)]
+    display_records = select_display_monthly_revenue_records(monthly_records)
+    display_data_month = str(meta.get("display_data_month") or "").strip()
+    if not display_data_month and display_records:
+        display_data_month = format_monthly_revenue_period(display_records[0].get("data_month"))
+    latest_update = format_meta_time(meta.get("last_success_at") or meta.get("seeded_at"))
+    newest_detected_at = format_meta_time(
+        meta.get("newest_detected_at") or newest_monthly_revenue_detected_at_iso(monthly_records)
+    )
+    parts = [source_label]
+    if display_data_month:
+        parts.append(f"營收月份：{display_data_month}")
+    if latest_update:
+        parts.append(f"最新更新：{latest_update}")
+    if newest_detected_at:
+        parts.append(f"最新偵測：{newest_detected_at}")
+    if meta.get("market_failure_count"):
+        parts.append("部分市場沿用既有 cache")
+    if meta.get("last_error"):
+        parts.append("最近更新失敗")
+    return " ｜ ".join(parts)
+
+
 def range_cache_seed_candidates(data_dir: Path) -> list[Path]:
     if not data_dir.exists():
         return []
@@ -848,9 +974,29 @@ def seed_persistent_cache_files(
 
     if monthly_seed is not None and monthly_seed.exists():
         target_monthly = target_dir / monthly_seed.name
+        target_monthly_meta = monthly_revenue_cache_meta_path(target_monthly)
         if not target_monthly.exists():
             shutil.copy2(monthly_seed, target_monthly)
-            seeded_paths.append(target_monthly)
+            records = json.loads(target_monthly.read_text(encoding="utf-8"))
+            meta = build_monthly_revenue_cache_meta(
+                target_monthly,
+                records if isinstance(records, list) else [],
+                seed_file=str(monthly_seed),
+                seeded_at=taiwan_now_iso(),
+                last_error=None,
+            )
+            save_monthly_revenue_cache_meta(target_monthly, meta)
+            seeded_paths.extend([target_monthly, target_monthly_meta])
+        elif not target_monthly_meta.exists():
+            records = json.loads(target_monthly.read_text(encoding="utf-8"))
+            meta = build_monthly_revenue_cache_meta(
+                target_monthly,
+                records if isinstance(records, list) else [],
+                created_at=taiwan_now_iso(),
+                last_error=None,
+            )
+            save_monthly_revenue_cache_meta(target_monthly, meta)
+            seeded_paths.append(target_monthly_meta)
     return seeded_paths
 
 
@@ -2410,7 +2556,12 @@ class DashboardServer:
                 self.cache_records[cache_key] = sort_event_records(cached_records)
                 self.cache_at[cache_key] = now
                 self.cache_records[f"{cache_key}:source"] = [
-                    {"source": f"monthly revenue cache: {self.monthly_revenue_output_path}"}
+                    {
+                        "source": format_monthly_revenue_cache_source(
+                            self.monthly_revenue_output_path,
+                            cached_records,
+                        )
+                    }
                 ]
             else:
                 result = self.update_monthly_revenue_summary_cache()
@@ -2451,46 +2602,79 @@ class DashboardServer:
 
     def update_monthly_revenue_summary_cache(self) -> dict[str, Any]:
         cache_file = self.monthly_revenue_output_path
-        existing_records = self._load_offline_records(cache_file) if cache_file.exists() else []
-        before_count = len(existing_records)
         revenue_roc_year, revenue_month = self._current_monthly_revenue_target()
+        target_data_month = f"{revenue_roc_year:03d}/{revenue_month:02d}"
+        target_display_data_month = f"{revenue_roc_year + 1911}/{revenue_month:02d}"
+        markets = self._monthly_revenue_summary_markets()
 
-        fetch_result = self.monthly_revenue_crawler.fetch_monthly_revenue_summary_with_fallbacks(
-            roc_year=revenue_roc_year,
-            month=revenue_month,
-            markets=self._monthly_revenue_summary_markets(),
-        )
-        latest_records = list(fetch_result.get("records", []))
-        market_results = list(fetch_result.get("market_results", []))
-        latest_records, fallback_skipped_existing_primary_count = (
-            filter_monthly_revenue_fallback_duplicates(existing_records, latest_records)
-        )
-        merged_records, new_records = append_new_monthly_revenue_records(
-            existing_records,
-            latest_records,
-        )
-        save_records(merged_records, cache_file)
+        try:
+            existing_records = self._load_offline_records(cache_file) if cache_file.exists() else []
+            before_count = len(existing_records)
+            fetch_result = self.monthly_revenue_crawler.fetch_monthly_revenue_summary_with_fallbacks(
+                roc_year=revenue_roc_year,
+                month=revenue_month,
+                markets=markets,
+            )
+            latest_records = list(fetch_result.get("records", []))
+            market_results = list(fetch_result.get("market_results", []))
+            latest_records, fallback_skipped_existing_primary_count = (
+                filter_monthly_revenue_fallback_duplicates(existing_records, latest_records)
+            )
+            merged_records, new_records = append_new_monthly_revenue_records(
+                existing_records,
+                latest_records,
+            )
+            save_records(merged_records, cache_file)
 
-        self.cache_records[MONTHLY_REVENUE_SUMMARY_CACHE_KEY] = merged_records
-        self.cache_at[MONTHLY_REVENUE_SUMMARY_CACHE_KEY] = time.monotonic()
-        market_failure_count = sum(1 for result in market_results if not result.get("ok"))
-        return {
-            "ok": market_failure_count == 0,
-            "degraded": market_failure_count > 0,
-            "source": "MOPS t21sc04_ifrs monthly revenue summary with OpenAPI fallbacks",
-            "cache_file": str(cache_file),
-            "fetched_count": len(latest_records),
-            "before_count": before_count,
-            "after_count": len(merged_records),
-            "new_count": len(new_records),
-            "markets": self._monthly_revenue_summary_markets(),
-            "market_results": market_results,
-            "market_failure_count": market_failure_count,
-            "fallback_skipped_existing_primary_count": fallback_skipped_existing_primary_count,
-            "data_month": f"{revenue_roc_year}/{revenue_month:02d}",
-            "display_data_month": f"{revenue_roc_year + 1911}/{revenue_month:02d}",
-            "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-        }
+            market_failure_count = sum(1 for result in market_results if not result.get("ok"))
+            meta = update_monthly_revenue_cache_meta(
+                cache_file,
+                merged_records,
+                target_data_month=target_data_month,
+                target_display_data_month=target_display_data_month,
+                markets=markets,
+                market_results=market_results,
+                market_failure_count=market_failure_count,
+                degraded=market_failure_count > 0,
+                fallback_skipped_existing_primary_count=fallback_skipped_existing_primary_count,
+                last_success_at=taiwan_now_iso(),
+                last_error=None,
+            )
+            self.cache_records[MONTHLY_REVENUE_SUMMARY_CACHE_KEY] = merged_records
+            self.cache_at[MONTHLY_REVENUE_SUMMARY_CACHE_KEY] = time.monotonic()
+            source = format_monthly_revenue_cache_source(cache_file, merged_records)
+            return {
+                "ok": market_failure_count == 0,
+                "degraded": market_failure_count > 0,
+                "source": source,
+                "cache_file": str(cache_file),
+                "meta_file": str(monthly_revenue_cache_meta_path(cache_file)),
+                "fetched_count": len(latest_records),
+                "before_count": before_count,
+                "after_count": len(merged_records),
+                "new_count": len(new_records),
+                "markets": markets,
+                "market_results": market_results,
+                "market_failure_count": market_failure_count,
+                "fallback_skipped_existing_primary_count": fallback_skipped_existing_primary_count,
+                "data_month": f"{revenue_roc_year}/{revenue_month:02d}",
+                "target_display_data_month": target_display_data_month,
+                "display_data_month": meta.get("display_data_month", ""),
+                "updated_at": meta.get("last_success_at", ""),
+            }
+        except Exception as exc:
+            existing_records = self._load_offline_records(cache_file) if cache_file.exists() else []
+            update_monthly_revenue_cache_meta(
+                cache_file,
+                existing_records,
+                target_data_month=target_data_month,
+                target_display_data_month=target_display_data_month,
+                markets=markets,
+                degraded=True,
+                last_failed_at=taiwan_now_iso(),
+                last_error=f"{type(exc).__name__}: {exc}",
+            )
+            raise
 
     def update_monthly_revenue_cache(self) -> dict[str, Any]:
         cache_file = self.monthly_revenue_output_path

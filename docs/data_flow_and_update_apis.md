@@ -39,12 +39,13 @@ Primary cache:
 Current display flow:
 
 1. `DashboardServer._get_monthly_revenue_records()` loads `/data/raw/monthly_revenue_latest.json` or `TWSE_DASHBOARD_MONTHLY_REVENUE_CACHE_FILE`.
-2. The page keeps only monthly revenue records and selects the newest available revenue period.
-3. Before a new period appears, the newest complete previous period remains visible.
-4. After any newer-period row appears, only that newer period is displayed.
-5. Company rows are de-duplicated by market, company code, and revenue period.
-6. Rows are sorted by crawler/event time and split into `市場未反映` and `歷史公告`.
-7. `detected_at` remains the data-observed timestamp. Official source dates are kept as source fields only.
+2. Source/update text is derived from `/data/raw/monthly_revenue_latest_meta.json` when present; if metadata is missing, the page falls back to values computed from the JSON cache.
+3. The page keeps only monthly revenue records and selects the newest available revenue period.
+4. Before a new period appears, the newest complete previous period remains visible.
+5. After any newer-period row appears, only that newer period is displayed.
+6. Company rows are de-duplicated by market, company code, and revenue period.
+7. Rows are sorted by crawler/event time and split into `市場未反映` and `歷史公告`.
+8. `detected_at` remains the data-observed timestamp. Official source dates are kept as source fields only.
 
 Update API:
 
@@ -63,6 +64,9 @@ Primary cache:
 
 - `TWSE_DASHBOARD_MONTHLY_REVENUE_CACHE_FILE`
 - Default: `/data/raw/monthly_revenue_latest.json`
+- Metadata: `/data/raw/monthly_revenue_latest_meta.json`
+- The metadata records `target_data_month`, `target_display_data_month`, `display_data_month`, `last_success_at`, `last_failed_at`, `last_error`, `market_results`, `market_failure_count`, `record_count`, `display_record_count`, and `newest_detected_at`.
+- `target_display_data_month` is the month the scheduler is trying to fetch. `display_data_month` is the month currently shown by the page, so it can remain on the previous month until newer-period rows are detected.
 
 ## Financial Report Tab
 
@@ -72,6 +76,7 @@ Current display flow:
 2. Records are filtered with `is_financial_report_record()`.
 3. Rows are split into `市場未反映` and `歷史公告` by the same market-close classifier.
 4. Original announcement text stays available through the same expandable-row pattern as the self-reported EPS tab.
+5. This tab is still a shared/derived flow. Do not treat monthly revenue metadata as independent financial-report freshness until a dedicated financial-report cache and update endpoint are added.
 
 Current limitation:
 

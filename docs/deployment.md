@@ -113,9 +113,10 @@ Monthly revenue scheduler direction:
 5. If `otc` fails, use TPEX OpenAPI `https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap05_O` as the OTC-company fallback.
 6. Append only new or changed rows to the monthly revenue cache. Use crawler `detected_at` as the data-observed timestamp.
 7. Do not use official `出表日期` as the row data time. Keep `出表日期` only as a source field.
-8. If a fallback also fails, keep the previous cache for that market and record the market failure in the monthly revenue update response.
-9. The page reads the multi-period cache but displays only the newest available revenue month. Before the new month appears, it keeps showing the prior month; after any new-month row appears, it switches to that month only.
-10. Set `FINMIND_TOKEN` or `FINMIND_API_TOKEN` in the production environment so the page can use FinMind `TaiwanStockTradingDate` for the latest completed market-close date. If FinMind is unavailable, the page falls back to weekday-based close detection.
+8. Write monthly revenue lifecycle metadata to `/data/raw/monthly_revenue_latest_meta.json`.
+9. If a fallback also fails, keep the previous cache for that market and record the market failure in both the monthly revenue update response and metadata.
+10. The page reads the multi-period cache but displays only the newest available revenue month. Before the new month appears, it keeps showing the prior month; after any new-month row appears, it switches to that month only.
+11. Set `FINMIND_TOKEN` or `FINMIND_API_TOKEN` in the production environment so the page can use FinMind `TaiwanStockTradingDate` for the latest completed market-close date. If FinMind is unavailable, the page falls back to weekday-based close detection.
 
 Source role notes:
 
@@ -138,7 +139,9 @@ The initial deployment seed should include:
 
 - a self-reported EPS/material-info range cache, for example `data/raw/material_info_2026-06-01_2026-06-27_financial_self_report.json`
 - `data/raw/monthly_revenue_latest.json`
+- `data/raw/monthly_revenue_latest_meta.json` is generated on first boot if it is not bundled yet.
 
 At runtime the material-info seed is copied/promoted into `/data/raw/material_info_range.json`; the original dated seed filename is not used as the long-lived active cache identity.
+Monthly revenue keeps `/data/raw/monthly_revenue_latest.json` as its long-lived active cache identity and stores lifecycle state in `/data/raw/monthly_revenue_latest_meta.json`.
 
 After Zeabur Volume is mounted at `/data`, these seed files should exist under `/data/raw` after first boot.
