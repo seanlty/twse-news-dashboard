@@ -1,0 +1,12 @@
+.git
+.github
+.pytest_cache
+.codex_tmp
+.agents
+.env
+__pycache__/
+*.py[cod]
+*.pyo
+*.log
+tests/__pycache__/
+src/__pycache__/

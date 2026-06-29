@@ -43,6 +43,17 @@ The `serve` command reads these environment variables as defaults:
 python src/main.py serve
 ```
 
+## Zeabur Docker entrypoint
+
+The repository includes a `Dockerfile` for Zeabur deployment. It sets:
+
+```text
+WORKDIR /app
+CMD ["python", "/app/src/main.py", "serve"]
+```
+
+This is intentional: Zeabur often assumes an app entry under `/app`, but this repo's server entrypoint is `src/main.py`, not `/app/main.py`.
+
 ## Production deployment TODO
 
 The current stable production direction is:

@@ -5,7 +5,7 @@ This tracker records what is still needed before the first Zeabur deployment can
 ## Current Target
 
 - Platform: Zeabur
-- Server command: `python src/main.py serve`
+- Docker entrypoint: `python /app/src/main.py serve`
 - Persistent cache mount: Zeabur Volume mounted at `/data`
 - Runtime cache folder: `/data/raw`
 - Scheduler: GitHub Actions calling protected update endpoints
@@ -37,6 +37,7 @@ TWSE_DASHBOARD_UPDATE_TOKEN=<same-secret-token-as-zeabur>
 
 | Item | Status | Implementation |
 | --- | --- | --- |
+| Zeabur Dockerfile | Done | `Dockerfile` uses `WORKDIR /app` and explicitly starts `/app/src/main.py`, avoiding Zeabur's default `/app/main.py` lookup. |
 | GitHub Actions workflow | Done | `.github/workflows/dashboard-update.yml` calls `/api/admin/update` and `/api/admin/update-monthly-revenue`. |
 | Zeabur persistent cache path | Done | Production defaults now write to `/data/raw/...`; `TWSE_DASHBOARD_DATA_ROOT` can override the root. |
 | Zeabur Volume mount | Manual | Mount a Zeabur Volume at `/data` before enabling the scheduler. |
@@ -90,7 +91,7 @@ TWSE_DASHBOARD_SEED_CACHE_ON_START=0
 
 ## Remaining Before First Public Use
 
-1. Commit and push the workflow and cache-path changes to the default branch.
+1. Commit and push the Dockerfile, workflow, and cache-path changes to the default branch.
 2. Configure Zeabur env vars and mount the `/data` Volume.
 3. Configure GitHub Actions secrets.
 4. Deploy Zeabur and confirm `/health`.
