@@ -7,17 +7,17 @@ This note records the current dashboard data path, update endpoints, cache files
 - `GET /` and `GET /index.html`: render the HTML dashboard.
 - `GET /api/news?tab=<tab>`: return the current tab records as JSON.
 - Supported tab values:
-  - `material-info`: self-reported EPS tab, displayed as `自結`.
+  - `material-info`: self-reported and attention-trading financial tab, displayed as `自結`.
   - `monthly-revenue`: monthly revenue tab, displayed as `月營收`.
   - `financial-report`: financial report tab, displayed as `財報`.
 
-## Self-Reported EPS Tab
+## Self-Reported / Attention Financial Tab
 
 Current display flow:
 
 1. `DashboardServer.get_records()` routes `MODE_RECENT_FINANCIAL` to `_get_recent_financial_records()`.
 2. `_get_recent_financial_records()` loads the range cache from `TWSE_DASHBOARD_RANGE_CACHE_FILE`, or the newest `/data/raw/material_info_*.json` file.
-3. Records are filtered to recent days, `CATEGORY_FINANCIAL_SELF_REPORT`, listed/OTC markets, and rows with EPS metrics.
+3. Records are filtered to recent days, listed/OTC markets, and recent-financial candidates: self-reported EPS, attention-trading financial/EPS disclosures, or self-reported profit/loss disclosures without EPS.
 4. Rows are split into `市場未反映` and `歷史公告` by the latest completed market close date.
 5. The tab title area shows latest announcement time from the newest record in the rendered dataset.
 

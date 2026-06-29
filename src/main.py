@@ -32,8 +32,8 @@ from mops_crawler import (
     enrich_records_for_cache,
     filter_records_by_company_id,
     filter_records_by_category,
+    filter_records_for_recent_financial,
     filter_records_by_recent_days,
-    filter_records_with_eps,
     get_or_extract_eps_metrics,
     normalize_time,
     save_records,
@@ -486,7 +486,7 @@ def render_material_info_panel_subtitle(records: list[dict[str, Any]], recent_da
     )
     return f"""
     <div class="panel-subtitle">
-      <div>近 {recent_days} 日財報自結 EPS（{len(records)} 筆）</div>
+      <div>近 {recent_days} 日自結/注意交易財務資訊（{len(records)} 筆）</div>
       <div>最新公告：{html.escape(latest_text)}</div>
     </div>
     """
@@ -2219,9 +2219,8 @@ class DashboardServer:
 
         records = self._load_offline_records(cache_file)
         records = filter_records_by_recent_days(records, days=self.recent_days)
-        records = filter_records_by_category(records, CATEGORY_FINANCIAL_SELF_REPORT)
         records = filter_records_by_listing_market(records)
-        records = filter_records_with_eps(records)
+        records = filter_records_for_recent_financial(records)
         records = sort_records_by_spoke_time(records)
         return records, f"range cache: {cache_file}"
 

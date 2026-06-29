@@ -50,6 +50,18 @@ class FakeCrawler:
 每股盈餘           -0.05               -0.19
 """,
                     },
+                },
+                {
+                    "company_id": "1529",
+                    "company_name": "樂事綠能",
+                    "spoke_date": "2026-06-29",
+                    "spoke_time": "14:41:41",
+                    "subject": "公告本公司115年05月自結合併損益",
+                    "detail_payload": {"TYPEK": "sii"},
+                    "detail": {
+                        "fields": {},
+                        "description": "合併營業損益 25,022 48,966\n合併稅前損益 50,579 91,808",
+                    },
                 }
             ],
             "otc": [
@@ -66,6 +78,22 @@ class FakeCrawler:
 期間              (月)                 (季)              (最近四季累計)
                   115年05月            115年第1季         114年第2季至115年第1季
 每股盈餘           0.02      102.33%    3.03    64.76%    5.52
+""",
+                    },
+                },
+                {
+                    "company_id": "4716",
+                    "company_name": "大立",
+                    "spoke_date": "2026-06-29",
+                    "spoke_time": "15:02:29",
+                    "subject": "公司有價證券近期多次達公布注意交易資訊標準，故公告相關訊息",
+                    "detail_payload": {"TYPEK": "otc"},
+                    "detail": {
+                        "fields": {},
+                        "description": """
+3.財務業務資訊:
+單月 (115/05) (114/05)
+每股盈餘(元) -0.03 -0.37
 """,
                     },
                 }
@@ -682,9 +710,12 @@ def test_update_latest_cache_merges_and_persists_eps_metrics(tmp_path: Path) -> 
         {"max_items": 0, "market": "sii"},
         {"max_items": 0, "market": "otc"},
     ]
-    assert result["new_count"] == 1
-    assert {record["company_id"] for record in records} == {"1435", "2017", "3163"}
-    assert all(record["eps_metrics"]["has_eps"] for record in records)
+    assert result["new_count"] == 3
+    assert {record["company_id"] for record in records} == {"1435", "1529", "2017", "3163", "4716"}
+    record_by_code = {record["company_id"]: record for record in records}
+    assert record_by_code["4716"]["financial_signal_kind"] == "attention_financial_eps"
+    assert record_by_code["1529"]["financial_signal_kind"] == "self_profit_without_eps"
+    assert record_by_code["1529"]["eps_metrics"]["has_eps"] is False
     saved_records = dashboard._load_offline_records(cache_file)
     saved_2017 = next(record for record in saved_records if record["company_id"] == "2017")
     assert saved_2017["detail_payload"]["TYPEK"] == "sii"

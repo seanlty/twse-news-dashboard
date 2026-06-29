@@ -4,6 +4,7 @@ from src.mops_crawler import (
     extract_eps_metrics,
     filter_records_by_company_id,
     filter_records_by_category,
+    filter_records_for_recent_financial,
     filter_records_by_recent_days,
     filter_records_with_eps,
     iter_dates,
@@ -335,6 +336,59 @@ def test_filter_records_by_category_keeps_only_financial_self_report() -> None:
 
     assert len(filtered) == 1
     assert filtered[0]["is_financial_self_report"] is True
+
+
+def test_filter_records_for_recent_financial_includes_attention_eps_and_self_profit_without_eps() -> None:
+    records = [
+        classify_record(
+            {
+                "company_id": "2017",
+                "subject": "公告本公司115年5月自結合併損益",
+                "detail": {"description": "每股盈餘 -0.05 -0.19"},
+            }
+        ),
+        classify_record(
+            {
+                "company_id": "4716",
+                "subject": "公司有價證券近期多次達公布注意交易資訊標準，故公告相關訊息",
+                "detail": {
+                    "description": """
+3.財務業務資訊:
+單月 (115/05) (114/05)
+每股盈餘(元) -0.03 -0.37
+"""
+                },
+            }
+        ),
+        classify_record(
+            {
+                "company_id": "1529",
+                "subject": "公告本公司115年05月自結合併損益",
+                "detail": {
+                    "description": "合併營業損益 25,022 48,966\n合併稅前損益 50,579 91,808",
+                },
+            }
+        ),
+        classify_record(
+            {
+                "company_id": "8444",
+                "subject": "公告本公司115年5月自結合併財務報告之負債比率、流動比率及速動比率",
+                "detail": {
+                    "description": "自結流動比率:9.01%\n自結速動比率:5.20%\n自結負債比率:99.98%",
+                },
+            }
+        ),
+    ]
+
+    filtered = filter_records_for_recent_financial(records)
+
+    assert [record["company_id"] for record in filtered] == ["2017", "4716", "1529"]
+    assert records[0]["financial_signal_kind"] == "self_report_eps"
+    assert records[1]["financial_signal_kind"] == "attention_financial_eps"
+    assert records[1]["is_attention_financial_eps"] is True
+    assert records[2]["financial_signal_kind"] == "self_profit_without_eps"
+    assert records[2]["is_self_profit_without_eps"] is True
+    assert records[3]["financial_signal_kind"] == ""
 
 
 def test_filter_records_by_company_id_matches_stock_code() -> None:

@@ -53,6 +53,12 @@ FINANCIAL_SELF_REPORT_CONTEXT_KEYWORDS = (
     "獲利",
     "合併",
 )
+ATTENTION_TRADING_KEYWORDS = ("注意交易", "公布注意", "公佈注意", "達公布注意", "達公佈注意")
+FINANCIAL_BUSINESS_KEYWORDS = ("財務業務資訊", "財務業務", "財務、業務", "相關財務業務")
+SELF_PROFIT_KEYWORDS = ("損益", "營業損益", "稅前損益", "稅後損益", "合併損益", "淨利", "淨損")
+FINANCIAL_SIGNAL_SELF_REPORT_EPS = "self_report_eps"
+FINANCIAL_SIGNAL_ATTENTION_EPS = "attention_financial_eps"
+FINANCIAL_SIGNAL_SELF_PROFIT_NO_EPS = "self_profit_without_eps"
 PREVIOUS_DAY_HIDDEN_PATTERN = re.compile(r"^h(\d+)([0-8])$")
 PREVIOUS_DAY_FIELD_NAMES = {
     "0": "company_name",
@@ -335,6 +341,24 @@ def filter_records_with_eps(records: list[dict[str, Any]]) -> list[dict[str, Any
     ]
 
 
+def record_classification_text(record: dict[str, Any]) -> str:
+    """Build searchable text from a MOPS summary/detail record."""
+    detail = record.get("detail") or record.get("detail_preview") or {}
+    fields = detail.get("fields") or {}
+    return "\n".join(
+        [
+            str(record.get("subject", "")),
+            str(detail.get("description", "")),
+            *[str(value) for value in fields.values()],
+        ]
+    )
+
+
+def has_any_keyword(text: str, keywords: tuple[str, ...]) -> bool:
+    normalized = text.casefold()
+    return any(keyword.casefold() in normalized for keyword in keywords)
+
+
 def is_financial_self_report_text(text: str) -> bool:
     """Return True when text looks like self-reported financial results."""
     normalized = text.casefold()
@@ -343,22 +367,57 @@ def is_financial_self_report_text(text: str) -> bool:
     )
 
 
+def is_attention_financial_business_text(text: str) -> bool:
+    """Return True for attention-trading disclosures with financial business tables."""
+    return has_any_keyword(text, ATTENTION_TRADING_KEYWORDS) and has_any_keyword(text, FINANCIAL_BUSINESS_KEYWORDS)
+
+
+def is_self_profit_text(text: str) -> bool:
+    """Return True for self-reported profit/loss disclosures."""
+    return "自結" in text and has_any_keyword(text, SELF_PROFIT_KEYWORDS)
+
+
+def recent_financial_signal_kind(record: dict[str, Any], text: str | None = None) -> str:
+    """Classify records that should appear in the recent financial tab."""
+    haystack = record_classification_text(record) if text is None else text
+    is_attention_financial_business = is_attention_financial_business_text(haystack)
+    is_self_profit = is_self_profit_text(haystack)
+    if not (record.get("is_financial_self_report") or is_attention_financial_business or is_self_profit):
+        return ""
+
+    metrics = get_or_extract_eps_metrics(record)
+    has_eps = bool(metrics.get("has_eps"))
+
+    if record.get("is_financial_self_report") and has_eps:
+        return FINANCIAL_SIGNAL_SELF_REPORT_EPS
+    if is_attention_financial_business and has_eps:
+        return FINANCIAL_SIGNAL_ATTENTION_EPS
+    if is_self_profit and not has_eps:
+        return FINANCIAL_SIGNAL_SELF_PROFIT_NO_EPS
+    return ""
+
+
+def is_recent_financial_record(record: dict[str, Any]) -> bool:
+    classify_record(record)
+    return bool(record.get("financial_signal_kind"))
+
+
+def filter_records_for_recent_financial(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep records displayed by the recent self-report/attention financial tab."""
+    return [record for record in records if is_recent_financial_record(record)]
+
+
 def classify_record(record: dict[str, Any]) -> dict[str, Any]:
     """Add category fields to a material-information record."""
-    detail = record.get("detail") or record.get("detail_preview") or {}
-    fields = detail.get("fields") or {}
-    text_parts = [
-        str(record.get("subject", "")),
-        str(detail.get("description", "")),
-        *[str(value) for value in fields.values()],
-    ]
-    haystack = "\n".join(text_parts)
+    haystack = record_classification_text(record)
     is_financial_self_report = is_financial_self_report_text(haystack)
     category = CATEGORY_FINANCIAL_SELF_REPORT if is_financial_self_report else "other"
     record["category"] = category
     record["is_financial_self_report"] = is_financial_self_report
-    if is_financial_self_report:
-        get_or_extract_eps_metrics(record)
+    signal_kind = recent_financial_signal_kind(record, haystack)
+    record["financial_signal_kind"] = signal_kind
+    record["is_attention_financial_eps"] = signal_kind == FINANCIAL_SIGNAL_ATTENTION_EPS
+    record["is_self_profit_without_eps"] = signal_kind == FINANCIAL_SIGNAL_SELF_PROFIT_NO_EPS
     return record
 
 
