@@ -59,3 +59,11 @@ jobs:
           curl -fsS -X POST \
             "${DASHBOARD_BASE_URL%/}/api/admin/update-monthly-revenue" \
             -H "Authorization: Bearer $UPDATE_TOKEN"
+
+      - name: Update financial report cache
+        if: steps.window.outputs.should_run == 'true'
+        shell: bash
+        run: |
+          curl -fsS -X POST \
+            "${DASHBOARD_BASE_URL%/}/api/admin/update-financial-report" \
+            -H "Authorization: Bearer $UPDATE_TOKEN"

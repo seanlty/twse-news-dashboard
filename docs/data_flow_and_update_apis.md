@@ -72,16 +72,29 @@ Primary cache:
 
 Current display flow:
 
-1. `DashboardServer._get_financial_report_records()` reads from the monthly signal cache path.
-2. Records are filtered with `is_financial_report_record()`.
-3. Rows are split into `市場未反映` and `歷史公告` by the same market-close classifier.
-4. Original announcement text stays available through the same expandable-row pattern as the self-reported EPS tab.
-5. This tab is still a shared/derived flow. Do not treat monthly revenue metadata as independent financial-report freshness until a dedicated financial-report cache and update endpoint are added.
+1. `DashboardServer._get_financial_report_records()` loads `/data/raw/financial_report_latest.json` or `TWSE_DASHBOARD_FINANCIAL_REPORT_CACHE_FILE`.
+2. Source/update text is derived from `/data/raw/financial_report_latest_meta.json` when present; if metadata is missing, the page falls back to values computed from the JSON cache.
+3. The page keeps only financial-report records and first tries to display the scheduler target quarter.
+4. Before the target quarter appears, the newest available prior quarter remains visible.
+5. After any target-quarter row appears, only that target quarter is displayed.
+6. Rows expose `quarter`, `eps`, `gross_margin_pct`, `operating_margin_pct`, and `non_operating_pct`.
+7. Rows are split into `市場未反映` and `歷史公告` by the same market-close classifier.
+8. Original announcement text stays available through the same expandable-row pattern as the self-reported EPS tab.
 
-Current limitation:
+Update API:
 
-- There is no dedicated financial-report update endpoint yet.
-- The tab currently depends on the monthly signal cache refresh path, not a separate persistent financial-report cache.
+- `POST /api/admin/update-financial-report`
+- Auth: same `Authorization: Bearer <TWSE_DASHBOARD_UPDATE_TOKEN>` contract.
+- Behavior: dynamically target the previous completed quarter, scan recent MOPS material-information query dates, parse financial report line items, merge/dedupe into the financial-report cache, and write lifecycle metadata.
+- Optional query overrides: `target_quarter=2026Q1` and `lookback_days=7`.
+
+Primary cache:
+
+- `TWSE_DASHBOARD_FINANCIAL_REPORT_CACHE_FILE`
+- Default: `/data/raw/financial_report_latest.json`
+- Metadata: `/data/raw/financial_report_latest_meta.json`
+- The metadata records `target_quarter`, `display_quarter`, `last_success_at`, `last_failed_at`, `last_error`, `query_dates`, `fetch_summaries`, `fetch_error_count`, `record_count`, `display_record_count`, `display_company_count`, `newest_announced_at`, and `newest_detected_at`.
+- `target_quarter` is the quarter the scheduler is trying to fetch. `display_quarter` is the quarter currently shown by the page, so it can remain on the prior quarter until newer-quarter rows are detected.
 
 ## Shared Table Behavior
 
@@ -96,6 +109,9 @@ Current limitation:
 - `TWSE_DASHBOARD_DATA_ROOT`: persistent cache root. Default is `/data`.
 - `TWSE_DASHBOARD_RANGE_CACHE_FILE`: active self-reported/attention financial range cache path.
 - `TWSE_DASHBOARD_MONTHLY_REVENUE_CACHE_FILE`: monthly revenue cache path.
+- `TWSE_DASHBOARD_FINANCIAL_REPORT_CACHE_FILE`: financial report cache path.
+- `TWSE_DASHBOARD_FINANCIAL_REPORT_TARGET_QUARTER`: optional override, e.g. `2026Q1`.
+- `TWSE_DASHBOARD_FINANCIAL_REPORT_LOOKBACK_DAYS`: MOPS query-date lookback for financial report updates. Default is `3`.
 - `TWSE_DASHBOARD_UPDATE_MIN_INTERVAL`: update cooldown seconds.
 - `TWSE_DASHBOARD_RECENT_DAYS`: self-reported EPS lookback window.
 - `TWSE_DASHBOARD_SEED_CACHE_ON_START`: set `0` to disable startup seed from bundled repo cache files.
@@ -107,11 +123,12 @@ Current limitation:
 | --- | --- | --- |
 | Self-reported/attention financial update API | Done | `/api/admin/update` merges realtime MOPS rows into active cache and updates metadata. |
 | Monthly revenue update API | Done | `/api/admin/update-monthly-revenue` updates newest target month with TWSE/TPEX fallbacks. |
+| Financial report update API | Done | `/api/admin/update-financial-report` scans MOPS material-information rows into active financial-report cache and updates metadata. |
 | Monthly revenue newest-period display | Done | Page shows only the newest available revenue period. |
 | Trading-day market reaction split | Done | Uses FinMind trading calendar when available, weekday fallback otherwise. |
 | Sortable tables | Done | All three tab tables support local grouped sorting. |
 | Zeabur persistent cache defaults | Done | Production defaults write cache files under `/data/raw`. |
 | Initial launch cache seed | Done | Startup seed copies missing bundled range/monthly caches into `/data/raw`. |
-| Financial report dedicated update/cache | Todo | Needs a separate endpoint/cache if the financial report tab must update independently. |
-| Deployment scheduler workflow | Done | `.github/workflows/dashboard-update.yml` calls both update endpoints. |
+| Financial report dedicated update/cache | Done | Uses `/data/raw/financial_report_latest.json` plus `/data/raw/financial_report_latest_meta.json`. |
+| Deployment scheduler workflow | Done | `.github/workflows/dashboard-update.yml` calls all three update endpoints. |
 | Production scheduler activation | Todo | Add GitHub secrets and confirm workflow runs on the default branch. |

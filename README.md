@@ -85,6 +85,8 @@ Demo page:
 - Previous day JSON: `http://127.0.0.1:8000/api/news?mode=previous`
 - Recent financial self-report JSON: `http://127.0.0.1:8000/api/news?mode=recent-financial`
 - Update cache API: `POST http://127.0.0.1:8000/api/admin/update`
+- Monthly revenue update API: `POST http://127.0.0.1:8000/api/admin/update-monthly-revenue`
+- Financial report update API: `POST http://127.0.0.1:8000/api/admin/update-financial-report`
 
 `mode=recent-financial` 會讀取本機 `crawl-range` 產生的區間 cache，取近 7 日並依公告日期時間倒序顯示，不會在點擊時重新爬站。可用 `--range-cache-file` 指定 cache 檔案，或用 `--recent-days` 調整天數。
 
@@ -106,6 +108,8 @@ Deployment reminder: see `docs/deployment.md` before production setup.
 $env:TWSE_DASHBOARD_UPDATE_TOKEN="dev-token"
 python src/main.py serve --host 127.0.0.1 --port 8000
 curl -X POST http://127.0.0.1:8000/api/admin/update -H "Authorization: Bearer dev-token"
+curl -X POST http://127.0.0.1:8000/api/admin/update-monthly-revenue -H "Authorization: Bearer dev-token"
+curl -X POST http://127.0.0.1:8000/api/admin/update-financial-report -H "Authorization: Bearer dev-token"
 ```
 
 部署時建議在 `.env` 或平台環境變數設定 `TWSE_DASHBOARD_UPDATE_TOKEN`，並用 Bearer token 呼叫：
@@ -114,7 +118,7 @@ curl -X POST http://127.0.0.1:8000/api/admin/update -H "Authorization: Bearer de
 curl -X POST https://your-domain.example/api/admin/update -H "Authorization: Bearer <token>"
 ```
 
-這個路徑會抓取公開資訊觀測站即時重大訊息、合併到 active range cache `/data/raw/material_info_range.json`、更新 `/data/raw/material_info_range_meta.json` 生命週期資訊，並有 300 秒 cooldown 避免短時間重複爬取。可用 `--update-min-interval` 調整 cooldown 秒數。
+`/api/admin/update` 會抓取公開資訊觀測站即時重大訊息、合併到 active range cache `/data/raw/material_info_range.json`、更新 `/data/raw/material_info_range_meta.json` 生命週期資訊，並有 300 秒 cooldown 避免短時間重複爬取。月營收與財報分別使用 `/data/raw/monthly_revenue_latest.json`、`/data/raw/financial_report_latest.json` 以及各自的 metadata 檔。
 
 若只是本機開發測試、且刻意不設定 token，可加 `--allow-unprotected-local-update`；production 不要使用這個選項。
 

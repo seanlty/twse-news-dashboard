@@ -31,6 +31,8 @@ PORT=<platform-port>
 TWSE_DASHBOARD_DATA_ROOT=/data
 TWSE_DASHBOARD_RANGE_CACHE_FILE=/data/raw/material_info_2026-06-01_2026-06-27_financial_self_report.json
 TWSE_DASHBOARD_MONTHLY_REVENUE_CACHE_FILE=/data/raw/monthly_revenue_latest.json
+TWSE_DASHBOARD_FINANCIAL_REPORT_CACHE_FILE=/data/raw/financial_report_latest.json
+TWSE_DASHBOARD_FINANCIAL_REPORT_LOOKBACK_DAYS=3
 TWSE_DASHBOARD_RECENT_DAYS=7
 TWSE_DASHBOARD_UPDATE_MIN_INTERVAL=300
 TWSE_DASHBOARD_UPDATE_TOKEN=<secret-token>
@@ -62,7 +64,7 @@ The current stable production direction is:
 2. Ship or mount that cache file with the production instance.
 3. Set `TWSE_DASHBOARD_RANGE_CACHE_FILE` to that cache path.
 4. Start the server with `python src/main.py serve`.
-5. Configure a scheduler to call `/api/admin/update` for incremental updates.
+5. Configure a scheduler to call `/api/admin/update`, `/api/admin/update-monthly-revenue`, and `/api/admin/update-financial-report` for incremental updates.
 6. Keep `TWSE_DASHBOARD_UPDATE_TOKEN` set and call the update endpoint with `Authorization: Bearer <token>`.
 7. Verify the deployed page has data before enabling the scheduler.
 
@@ -81,6 +83,8 @@ The app defaults to `/data/raw/...` for production cache files. Keep update endp
 For material-info/self-report data, the active cache is `/data/raw/material_info_range.json` and the lifecycle metadata file is `/data/raw/material_info_range_meta.json`. On first boot, `python src/main.py serve` promotes an existing legacy `/data/raw/material_info_*.json` file into the active cache when present; otherwise it seeds the active cache from the bundled repo `data/raw` folder. This preserves already-updated Zeabur volume data while moving the page away from date-stamped seed filenames.
 
 The metadata file records seed/update lifecycle fields such as `seeded_at`, `last_success_at`, `last_error`, `record_count`, and `newest_spoke_at`. The page header should describe source/update state from metadata, not infer freshness from the cache filename.
+
+For financial-report data, the active cache is `/data/raw/financial_report_latest.json` and the lifecycle metadata file is `/data/raw/financial_report_latest_meta.json`. The update endpoint is `POST /api/admin/update-financial-report`; it scans recent MOPS material-information query dates, parses `quarter`, `eps`, `gross_margin_pct`, `operating_margin_pct`, and `non_operating_pct`, then merges/dedupes rows into the active cache. The metadata separates `target_quarter` from `display_quarter`, so the page can keep showing the latest available completed quarter until a newer quarter is detected.
 
 Seed behavior can be disabled with:
 
@@ -125,6 +129,19 @@ Source role notes:
 - `mopsfin_t187ap05_O`: fallback or cross-check source for OTC companies from TPEX OpenAPI. It completes the listed plus OTC fallback plan, but MOPS remains the primary source when available.
 - `TaiwanStockTradingDate`: FinMind trading-calendar source used only to classify monthly revenue rows into `市場未反映` versus `歷史公告`. The row timestamp remains crawler `detected_at`.
 
+## Financial Report Scheduler Memo
+
+The financial report cache update endpoint is `POST /api/admin/update-financial-report` and uses the same `Authorization: Bearer <TWSE_DASHBOARD_UPDATE_TOKEN>` contract.
+
+Financial report scheduler direction:
+
+1. Run the endpoint in the same `07:00-23:00 Asia/Taipei` monitoring window as the other update endpoints.
+2. By default the target quarter is the previous completed calendar quarter. For example, calls during June 2026 target `2026Q1`; calls during July 2026 target `2026Q2`.
+3. The endpoint scans recent MOPS material-information query dates. Default lookback is `3` days and can be changed with `TWSE_DASHBOARD_FINANCIAL_REPORT_LOOKBACK_DAYS` or `?lookback_days=7`.
+4. MOPS query dates can include rows from adjacent announcement dates, so the updater filters by actual `spoke_date_roc` and de-duplicates by company/date/time/quarter/subject.
+5. Manual backfills can pass `target_quarter=2026Q1&lookback_days=14` to the endpoint, but keep request frequency low when widening the lookback.
+6. If all query dates fail, the endpoint keeps the previous cache and records `last_failed_at` / `last_error` in `/data/raw/financial_report_latest_meta.json`.
+
 ## Cache before first deploy
 
 Before deploying, make sure the demo/range cache has derived EPS fields written to disk:
@@ -140,8 +157,10 @@ The initial deployment seed should include:
 - a self-reported EPS/material-info range cache, for example `data/raw/material_info_2026-06-01_2026-06-27_financial_self_report.json`
 - `data/raw/monthly_revenue_latest.json`
 - `data/raw/monthly_revenue_latest_meta.json` is generated on first boot if it is not bundled yet.
+- optional `data/raw/financial_report_latest.json`; `data/raw/financial_report_latest_meta.json` is generated on first boot if it is not bundled yet.
 
 At runtime the material-info seed is copied/promoted into `/data/raw/material_info_range.json`; the original dated seed filename is not used as the long-lived active cache identity.
 Monthly revenue keeps `/data/raw/monthly_revenue_latest.json` as its long-lived active cache identity and stores lifecycle state in `/data/raw/monthly_revenue_latest_meta.json`.
+Financial report keeps `/data/raw/financial_report_latest.json` as its long-lived active cache identity and stores lifecycle state in `/data/raw/financial_report_latest_meta.json`.
 
 After Zeabur Volume is mounted at `/data`, these seed files should exist under `/data/raw` after first boot.

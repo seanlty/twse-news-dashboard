@@ -267,6 +267,45 @@ class FailingMonthlyRevenueCrawler:
         raise RuntimeError("monthly source unavailable")
 
 
+FINANCIAL_REPORT_DETAIL = """
+1.提報董事會或經董事會決議日期:115/05/14
+2.審計委員會通過日期:115/05/14
+3.財務報告或年度自結財務資訊報導期間
+起訖日期(XXX/XX/XX~XXX/XX/XX):115/01/01~115/03/31
+4.1月1日累計至本期止營業收入(仟元):2,370,728
+5.1月1日累計至本期止營業毛利(毛損) (仟元):424,988
+6.1月1日累計至本期止營業利益(損失) (仟元):313,521
+7.1月1日累計至本期止稅前淨利(淨損) (仟元):283,927
+8.1月1日累計至本期止本期淨利(淨損) (仟元):186,025
+9.1月1日累計至本期止歸屬於母公司業主淨利(損) (仟元):186,025
+10.1月1日累計至本期止基本每股盈餘(損失) (元):1.51
+"""
+
+
+class FakeFinancialReportCrawler:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    def fetch_previous_day_summaries(self, target_date=None, market: str = "all") -> list[dict]:
+        self.calls.append({"target_date": target_date, "market": market})
+        return [
+            {
+                "company_id": "4739",
+                "company_name": "康普",
+                "spoke_date_roc": "115/05/14",
+                "spoke_date": "2026-05-14",
+                "spoke_time": "17:30:33",
+                "subject": "公告本公司董事會通過115年第一季合併財務報告",
+                "detail_preview": {"description": FINANCIAL_REPORT_DETAIL},
+            }
+        ]
+
+
+class FailingFinancialReportCrawler:
+    def fetch_previous_day_summaries(self, target_date=None, market: str = "all") -> list[dict]:
+        raise RuntimeError("financial source unavailable")
+
+
 def make_dashboard(
     range_cache_file: Path | None = None,
     crawler: object | None = None,
@@ -275,6 +314,9 @@ def make_dashboard(
     monthly_revenue_company_ids: list[str] | None = None,
     monthly_revenue_roc_year: int | None = None,
     monthly_revenue_month: int | None = None,
+    financial_report_output_path: Path | None = None,
+    financial_report_target_quarter: str | None = None,
+    financial_report_lookback_days: int = 3,
 ) -> DashboardServer:
     return DashboardServer(
         crawler=crawler or FakeCrawler(),
@@ -291,6 +333,9 @@ def make_dashboard(
         monthly_revenue_company_ids=monthly_revenue_company_ids,
         monthly_revenue_roc_year=monthly_revenue_roc_year,
         monthly_revenue_month=monthly_revenue_month,
+        financial_report_output_path=financial_report_output_path or (Path("__missing_financial_report_cache__.json")),
+        financial_report_target_quarter=financial_report_target_quarter,
+        financial_report_lookback_days=financial_report_lookback_days,
     )
 
 
@@ -531,6 +576,14 @@ def test_dashboard_cache_defaults_use_persistent_data_root(monkeypatch, tmp_path
         main_module.DEFAULT_MONTHLY_REVENUE_META_PATH.as_posix()
         == "/data/raw/monthly_revenue_latest_meta.json"
     )
+    assert (
+        main_module.DEFAULT_FINANCIAL_REPORT_OUTPUT_PATH.as_posix()
+        == "/data/raw/financial_report_latest.json"
+    )
+    assert (
+        main_module.DEFAULT_FINANCIAL_REPORT_META_PATH.as_posix()
+        == "/data/raw/financial_report_latest_meta.json"
+    )
 
     custom_root = tmp_path / "volume"
     monkeypatch.setenv(main_module.DATA_ROOT_ENV, str(custom_root))
@@ -546,6 +599,14 @@ def test_dashboard_cache_defaults_use_persistent_data_root(monkeypatch, tmp_path
         main_module.default_monthly_revenue_meta_path()
         == custom_root / "raw" / "monthly_revenue_latest_meta.json"
     )
+    assert (
+        main_module.default_financial_report_output_path()
+        == custom_root / "raw" / "financial_report_latest.json"
+    )
+    assert (
+        main_module.default_financial_report_meta_path()
+        == custom_root / "raw" / "financial_report_latest_meta.json"
+    )
 
 
 def test_seed_persistent_cache_files_promotes_existing_seed_to_active_cache(tmp_path: Path) -> None:
@@ -554,6 +615,17 @@ def test_seed_persistent_cache_files_promotes_existing_seed_to_active_cache(tmp_
     source_raw.mkdir(parents=True)
     save_records([{"company_id": "1111"}], source_raw / "material_info_2026-06-01_2026-06-27.json")
     save_records([{"company_id": "2222"}], source_raw / "monthly_revenue_latest.json")
+    save_records(
+        [
+            {
+                "company_id": "4739",
+                "event_type": "financial_report",
+                "quarter": "2026Q1",
+                "detected_at": "2026-05-14T17:31:00+08:00",
+            }
+        ],
+        source_raw / "financial_report_latest.json",
+    )
     save_records(
         [{"company_id": "3333"}],
         source_raw / "material_info_2026-06-01_2026-06-27_financial_self_report.json",
@@ -568,11 +640,15 @@ def test_seed_persistent_cache_files_promotes_existing_seed_to_active_cache(tmp_
     active_cache = target_raw / "material_info_range.json"
     meta_path = target_raw / "material_info_range_meta.json"
     monthly_meta_path = target_raw / "monthly_revenue_latest_meta.json"
+    financial_cache = target_raw / "financial_report_latest.json"
+    financial_meta_path = target_raw / "financial_report_latest_meta.json"
 
     assert active_cache in seeded_paths
     assert meta_path in seeded_paths
     assert existing_monthly not in seeded_paths
     assert monthly_meta_path in seeded_paths
+    assert financial_cache in seeded_paths
+    assert financial_meta_path in seeded_paths
     assert main_module.json.loads(active_cache.read_text(encoding="utf-8")) == [{"company_id": "live"}]
     meta = main_module.json.loads(meta_path.read_text(encoding="utf-8"))
     assert meta["cache_file"] == str(active_cache)
@@ -581,6 +657,10 @@ def test_seed_persistent_cache_files_promotes_existing_seed_to_active_cache(tmp_
     monthly_meta = main_module.json.loads(monthly_meta_path.read_text(encoding="utf-8"))
     assert monthly_meta["cache_file"] == str(existing_monthly)
     assert monthly_meta["record_count"] == 1
+    financial_meta = main_module.json.loads(financial_meta_path.read_text(encoding="utf-8"))
+    assert financial_meta["cache_file"] == str(financial_cache)
+    assert financial_meta["record_count"] == 1
+    assert financial_meta["display_quarter"] == "2026Q1"
     assert main_module.json.loads(existing_monthly.read_text(encoding="utf-8")) == [
         {"company_id": "existing"}
     ]
@@ -715,13 +795,42 @@ def test_update_monthly_revenue_summary_records_failure_in_meta(tmp_path: Path) 
 
 
 def test_financial_report_tab_renders_financial_records(tmp_path: Path) -> None:
-    monthly_cache = tmp_path / "monthly-cache.json"
+    financial_cache = tmp_path / "financial-report-cache.json"
+    save_records(
+        [
+            {
+                "source_type": "mops_material_financial_report",
+                "source_label": "重大訊息-財報",
+                "event_type": "financial_report",
+                "company_id": "4739",
+                "company_name": "康普",
+                "title": "本公司董事會通過115年第一季合併財務報告",
+                "subject": "本公司董事會通過115年第一季合併財務報告",
+                "quarter": "2026Q1",
+                "announced_at": "2026-05-14T17:30:33",
+                "event_time": "2026-05-14T17:30:33",
+                "detected_at": "2026-05-14T17:31:00+08:00",
+                "eps": 1.51,
+                "gross_margin_pct": 17.93,
+                "operating_margin_pct": 13.23,
+                "non_operating_pct": -10.42,
+                "metrics": {
+                    "quarter": "2026Q1",
+                    "revenue_k": 2370728,
+                    "gross_margin_pct": 17.93,
+                    "operating_margin_pct": 13.23,
+                    "non_operating_pct": -10.42,
+                    "eps": 1.51,
+                },
+                "detail": {"description": FINANCIAL_REPORT_DETAIL},
+            }
+        ],
+        financial_cache,
+    )
     dashboard = make_dashboard(
         range_cache_file=tmp_path / "missing-cache.json",
         crawler=FailingCrawler(),
-        monthly_revenue_crawler=FakeMonthlyRevenueCrawler(),
-        monthly_revenue_output_path=monthly_cache,
-        monthly_revenue_company_ids=["4739"],
+        financial_report_output_path=financial_cache,
     )
 
     html = fetch_dashboard_html(dashboard, f"/?tab={TAB_FINANCIAL_REPORT}")
@@ -730,12 +839,246 @@ def test_financial_report_tab_renders_financial_records(tmp_path: Path) -> None:
     assert "4739" in html
     assert "康普" in html
     assert "本公司董事會通過115年第一季合併財務報告" in html
-    assert "2,370.7" in html
+    assert "2026Q1" in html
     assert "1.51" in html
+    assert "17.93%" in html
+    assert "13.23%" in html
+    assert "-10.42%" in html
+    assert "財報季度：2026Q1" in html
     assert "data-sortable-table" in html
     assert 'data-sort-type="time"' in html
     assert "1,026.9" not in html
     assert 'name="q"' in html
+
+
+def test_financial_report_tab_only_displays_latest_quarter(tmp_path: Path) -> None:
+    financial_cache = tmp_path / "financial-report-cache.json"
+    save_records(
+        [
+            {
+                "event_type": "financial_report",
+                "company_id": "1111",
+                "company_name": "舊季",
+                "quarter": "2025Q4",
+                "event_time": "2026-03-01T16:00:00",
+                "eps": 0.1,
+                "detail": {"description": "舊季財務報告"},
+            },
+            {
+                "event_type": "financial_report",
+                "company_id": "2222",
+                "company_name": "新季",
+                "quarter": "2026Q1",
+                "event_time": "2026-05-14T17:30:33",
+                "eps": 1.2,
+                "detail": {"description": "新季財務報告"},
+            },
+        ],
+        financial_cache,
+    )
+    dashboard = make_dashboard(
+        range_cache_file=tmp_path / "missing-cache.json",
+        crawler=FailingCrawler(),
+        financial_report_output_path=financial_cache,
+    )
+
+    html = fetch_dashboard_html(dashboard, f"/?tab={TAB_FINANCIAL_REPORT}")
+
+    assert "新季" in html
+    assert "舊季" not in html
+    assert "財報季度：2026Q1" in html
+
+
+def test_financial_report_tab_falls_back_to_previous_quarter_until_target_arrives(tmp_path: Path) -> None:
+    financial_cache = tmp_path / "financial-report-cache.json"
+    save_records(
+        [
+            {
+                "event_type": "financial_report",
+                "company_id": "1111",
+                "company_name": "更舊季",
+                "quarter": "2025Q4",
+                "event_time": "2026-03-01T16:00:00",
+                "eps": 0.1,
+                "detail": {"description": "更舊季財務報告"},
+            },
+            {
+                "event_type": "financial_report",
+                "company_id": "2222",
+                "company_name": "上一季一",
+                "quarter": "2026Q1",
+                "event_time": "2026-05-14T17:30:33",
+                "eps": 1.2,
+                "detail": {"description": "上一季一財務報告"},
+            },
+            {
+                "event_type": "financial_report",
+                "company_id": "3333",
+                "company_name": "上一季二",
+                "quarter": "2026Q1",
+                "event_time": "2026-05-14T17:31:33",
+                "eps": 2.3,
+                "detail": {"description": "上一季二財務報告"},
+            },
+        ],
+        financial_cache,
+    )
+    dashboard = make_dashboard(
+        range_cache_file=tmp_path / "missing-cache.json",
+        crawler=FailingCrawler(),
+        financial_report_output_path=financial_cache,
+        financial_report_target_quarter="2026Q2",
+    )
+
+    html = fetch_dashboard_html(dashboard, f"/?tab={TAB_FINANCIAL_REPORT}")
+
+    assert "上一季一" in html
+    assert "上一季二" in html
+    assert "更舊季" not in html
+    assert "財報季度：2026Q1" in html
+
+
+def test_financial_report_tab_switches_to_target_quarter_when_available(tmp_path: Path) -> None:
+    financial_cache = tmp_path / "financial-report-cache.json"
+    save_records(
+        [
+            {
+                "event_type": "financial_report",
+                "company_id": "1111",
+                "company_name": "上一季",
+                "quarter": "2026Q1",
+                "event_time": "2026-05-14T17:30:33",
+                "eps": 1.2,
+                "detail": {"description": "上一季財務報告"},
+            },
+            {
+                "event_type": "financial_report",
+                "company_id": "2222",
+                "company_name": "目標季",
+                "quarter": "2026Q2",
+                "event_time": "2026-08-14T17:30:33",
+                "eps": 2.4,
+                "detail": {"description": "目標季財務報告"},
+            },
+        ],
+        financial_cache,
+    )
+    dashboard = make_dashboard(
+        range_cache_file=tmp_path / "missing-cache.json",
+        crawler=FailingCrawler(),
+        financial_report_output_path=financial_cache,
+        financial_report_target_quarter="2026Q2",
+    )
+
+    html = fetch_dashboard_html(dashboard, f"/?tab={TAB_FINANCIAL_REPORT}")
+
+    assert "目標季" in html
+    assert "上一季" not in html
+    assert "財報季度：2026Q2" in html
+
+
+def test_update_financial_report_cache_writes_active_cache_and_meta(tmp_path: Path) -> None:
+    financial_cache = tmp_path / "financial-report-cache.json"
+    crawler = FakeFinancialReportCrawler()
+    dashboard = make_dashboard(
+        crawler=crawler,
+        financial_report_output_path=financial_cache,
+        financial_report_target_quarter="2026Q1",
+        financial_report_lookback_days=1,
+    )
+
+    result = dashboard.update_financial_report_cache(reference_date=date(2026, 5, 14))
+    records = dashboard._load_offline_records(financial_cache)
+
+    assert result["ok"] is True
+    assert result["meta_file"] == str(main_module.financial_report_cache_meta_path(financial_cache))
+    assert result["target_quarter"] == "2026Q1"
+    assert result["display_quarter"] == "2026Q1"
+    assert result["query_dates"] == ["2026-05-14"]
+    assert result["fetched_count"] == 1
+    assert records[0]["company_id"] == "4739"
+    assert records[0]["quarter"] == "2026Q1"
+    assert records[0]["eps"] == 1.51
+    assert records[0]["gross_margin_pct"] == 17.93
+    assert records[0]["operating_margin_pct"] == 13.22
+    meta = main_module.load_financial_report_cache_meta(financial_cache)
+    assert meta["target_quarter"] == "2026Q1"
+    assert meta["display_quarter"] == "2026Q1"
+    assert meta["display_record_count"] == 1
+    assert meta["fetch_error_count"] == 0
+    assert meta["last_error"] is None
+    assert meta["newest_announced_at"].startswith("2026-05-14T17:30:33")
+
+
+def test_update_financial_report_cache_keeps_previous_display_quarter_until_target_arrives(
+    tmp_path: Path,
+) -> None:
+    financial_cache = tmp_path / "financial-report-cache.json"
+    save_records(
+        [
+            {
+                "event_type": "financial_report",
+                "company_id": "4739",
+                "company_name": "康普",
+                "quarter": "2026Q1",
+                "event_time": "2026-05-14T17:30:33",
+                "detected_at": "2026-05-14T17:31:00+08:00",
+            }
+        ],
+        financial_cache,
+    )
+    dashboard = make_dashboard(
+        crawler=FakeFinancialReportCrawler(),
+        financial_report_output_path=financial_cache,
+        financial_report_target_quarter="2026Q2",
+        financial_report_lookback_days=1,
+    )
+
+    result = dashboard.update_financial_report_cache(reference_date=date(2026, 5, 14))
+    records = dashboard._load_offline_records(financial_cache)
+    meta = main_module.load_financial_report_cache_meta(financial_cache)
+
+    assert result["ok"] is True
+    assert result["target_quarter"] == "2026Q2"
+    assert result["display_quarter"] == "2026Q1"
+    assert result["fetched_count"] == 0
+    assert meta["target_quarter"] == "2026Q2"
+    assert meta["display_quarter"] == "2026Q1"
+    assert meta["display_record_count"] == 1
+    assert records[0]["quarter"] == "2026Q1"
+
+
+def test_update_financial_report_cache_records_failure_in_meta(tmp_path: Path) -> None:
+    financial_cache = tmp_path / "financial-report-cache.json"
+    save_records(
+        [
+            {
+                "event_type": "financial_report",
+                "company_id": "4739",
+                "quarter": "2026Q1",
+                "event_time": "2026-05-14T17:30:33",
+                "detected_at": "2026-05-14T17:31:00+08:00",
+            }
+        ],
+        financial_cache,
+    )
+    dashboard = make_dashboard(
+        crawler=FailingFinancialReportCrawler(),
+        financial_report_output_path=financial_cache,
+        financial_report_target_quarter="2026Q1",
+        financial_report_lookback_days=1,
+    )
+
+    with pytest.raises(RuntimeError):
+        dashboard.update_financial_report_cache(reference_date=date(2026, 5, 14))
+
+    meta = main_module.load_financial_report_cache_meta(financial_cache)
+    assert meta["target_quarter"] == "2026Q1"
+    assert meta["display_quarter"] == "2026Q1"
+    assert meta["degraded"] is True
+    assert meta["fetch_error_count"] == 1
+    assert meta["last_error"].startswith("RuntimeError:")
+    assert main_module.json.loads(financial_cache.read_text(encoding="utf-8"))[0]["company_id"] == "4739"
 
 
 def test_update_latest_cache_merges_and_persists_eps_metrics(tmp_path: Path) -> None:

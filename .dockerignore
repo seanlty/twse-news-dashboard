@@ -8,6 +8,7 @@ data/raw/*
 !data/raw/.gitkeep
 !data/raw/material_info_2026-06-01_2026-06-27_financial_self_report.json
 !data/raw/monthly_revenue_latest.json
+!data/raw/financial_report_latest.json
 data/processed/*
 !data/processed/.gitkeep
 __pycache__/

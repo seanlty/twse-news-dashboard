@@ -6,8 +6,10 @@ import argparse
 import html
 import json
 import os
+import re
 import shutil
 import time
+from collections import Counter
 from datetime import date, datetime, time as datetime_time, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -18,6 +20,10 @@ from zoneinfo import ZoneInfo
 import requests
 from dotenv import load_dotenv
 
+from financial_report_crawler import (
+    build_financial_report_record,
+    dedupe_financial_report_records,
+)
 from mops_crawler import (
     CATEGORY_CHOICES,
     CATEGORY_ALL,
@@ -63,7 +69,10 @@ DEFAULT_RANGE_OUTPUT_PATH = DEFAULT_RAW_DATA_DIR / "material_info_range.json"
 DEFAULT_RANGE_META_PATH = DEFAULT_RAW_DATA_DIR / "material_info_range_meta.json"
 DEFAULT_MONTHLY_REVENUE_OUTPUT_PATH = DEFAULT_RAW_DATA_DIR / "monthly_revenue_latest.json"
 DEFAULT_MONTHLY_REVENUE_META_PATH = DEFAULT_RAW_DATA_DIR / "monthly_revenue_latest_meta.json"
+DEFAULT_FINANCIAL_REPORT_OUTPUT_PATH = DEFAULT_RAW_DATA_DIR / "financial_report_latest.json"
+DEFAULT_FINANCIAL_REPORT_META_PATH = DEFAULT_RAW_DATA_DIR / "financial_report_latest_meta.json"
 DEFAULT_RECENT_DAYS = 7
+DEFAULT_FINANCIAL_REPORT_LOOKBACK_DAYS = 3
 MODE_LATEST = "latest"
 MODE_PREVIOUS = "previous"
 MODE_RECENT_FINANCIAL = "recent-financial"
@@ -83,6 +92,7 @@ MARKET_CLOSE_TIME = datetime_time(13, 30)
 MARKET_CLOSE_TIME_TEXT = "13:30:00"
 UPDATE_API_PATH = "/api/admin/update"
 MONTHLY_REVENUE_UPDATE_API_PATH = "/api/admin/update-monthly-revenue"
+FINANCIAL_REPORT_UPDATE_API_PATH = "/api/admin/update-financial-report"
 UPDATE_TOKEN_ENV = "TWSE_DASHBOARD_UPDATE_TOKEN"
 DEV_ALLOW_UNPROTECTED_UPDATE_ENV = "TWSE_DASHBOARD_DEV_ALLOW_UNPROTECTED_UPDATE"
 RANGE_CACHE_FILE_ENV = "TWSE_DASHBOARD_RANGE_CACHE_FILE"
@@ -90,6 +100,9 @@ RECENT_DAYS_ENV = "TWSE_DASHBOARD_RECENT_DAYS"
 UPDATE_MIN_INTERVAL_ENV = "TWSE_DASHBOARD_UPDATE_MIN_INTERVAL"
 MONTHLY_REVENUE_COMPANY_IDS_ENV = "TWSE_DASHBOARD_MONTHLY_REVENUE_COMPANY_IDS"
 MONTHLY_REVENUE_CACHE_FILE_ENV = "TWSE_DASHBOARD_MONTHLY_REVENUE_CACHE_FILE"
+FINANCIAL_REPORT_CACHE_FILE_ENV = "TWSE_DASHBOARD_FINANCIAL_REPORT_CACHE_FILE"
+FINANCIAL_REPORT_TARGET_QUARTER_ENV = "TWSE_DASHBOARD_FINANCIAL_REPORT_TARGET_QUARTER"
+FINANCIAL_REPORT_LOOKBACK_DAYS_ENV = "TWSE_DASHBOARD_FINANCIAL_REPORT_LOOKBACK_DAYS"
 FINMIND_TOKEN_ENV_NAMES = ("FINMIND_TOKEN", "FINMIND_API_TOKEN")
 FINMIND_DATA_API_URL = "https://api.finmindtrade.com/api/v4/data"
 FINMIND_TRADING_DATE_DATASET = "TaiwanStockTradingDate"
@@ -159,6 +172,14 @@ def default_monthly_revenue_output_path() -> Path:
 
 def default_monthly_revenue_meta_path() -> Path:
     return dashboard_cache_path("monthly_revenue_latest_meta.json")
+
+
+def default_financial_report_output_path() -> Path:
+    return dashboard_cache_path("financial_report_latest.json")
+
+
+def default_financial_report_meta_path() -> Path:
+    return dashboard_cache_path("financial_report_latest_meta.json")
 
 
 def env_first(names: tuple[str, ...]) -> str:
@@ -452,6 +473,33 @@ def format_monthly_revenue_period(value: Any) -> str:
     return f"{year + 1911}/{month:02d}"
 
 
+def default_financial_report_target_quarter(today: date | None = None) -> str:
+    current = today or taiwan_now().date()
+    current_quarter = (current.month - 1) // 3 + 1
+    year = current.year
+    quarter = current_quarter - 1
+    if quarter == 0:
+        year -= 1
+        quarter = 4
+    return f"{year}Q{quarter}"
+
+
+def iso_date_to_roc_label(value: date) -> str:
+    return f"{value.year - 1911:03d}/{value.month:02d}/{value.day:02d}"
+
+
+def financial_report_quarter_key(value: Any) -> tuple[int, int] | None:
+    text = str(value or "").strip().upper()
+    match = re.fullmatch(r"(\d{4})Q([1-4])", text)
+    if not match:
+        return None
+    return int(match.group(1)), int(match.group(2))
+
+
+def financial_report_record_quarter_key(record: dict[str, Any]) -> tuple[int, int] | None:
+    return financial_report_quarter_key(record.get("quarter", ""))
+
+
 def filter_latest_monthly_revenue_period(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     keyed_records = [
         (period_key, record)
@@ -481,6 +529,56 @@ def select_display_monthly_revenue_records(records: list[dict[str, Any]]) -> lis
     return dedupe_latest_monthly_revenue_by_company(latest_period_records)
 
 
+def filter_latest_financial_report_quarter(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    keyed_records = [
+        (quarter_key, record)
+        for record in records
+        if (quarter_key := financial_report_record_quarter_key(record)) is not None
+    ]
+    if not keyed_records:
+        return []
+    latest_quarter = max(quarter_key for quarter_key, _ in keyed_records)
+    return [record for quarter_key, record in keyed_records if quarter_key == latest_quarter]
+
+
+def filter_display_financial_report_quarter(
+    records: list[dict[str, Any]],
+    target_quarter: str | None = None,
+) -> list[dict[str, Any]]:
+    keyed_records = [
+        (quarter_key, record)
+        for record in records
+        if (quarter_key := financial_report_record_quarter_key(record)) is not None
+    ]
+    if not keyed_records:
+        return []
+
+    target_key = financial_report_quarter_key(target_quarter)
+    if target_key is not None:
+        available_keys = {quarter_key for quarter_key, _ in keyed_records}
+        display_key = target_key if target_key in available_keys else None
+        if display_key is None:
+            fallback_keys = [quarter_key for quarter_key, _ in keyed_records if quarter_key <= target_key]
+            display_key = max(fallback_keys) if fallback_keys else max(available_keys)
+    else:
+        display_key = max(quarter_key for quarter_key, _ in keyed_records)
+
+    return [record for quarter_key, record in keyed_records if quarter_key == display_key]
+
+
+def select_display_financial_report_records(
+    records: list[dict[str, Any]],
+    target_quarter: str | None = None,
+) -> list[dict[str, Any]]:
+    display_quarter_records = filter_display_financial_report_quarter(records, target_quarter)
+    return dedupe_financial_report_records(sort_event_records(display_quarter_records))
+
+
+def financial_report_company_count(records: list[dict[str, Any]]) -> int:
+    company_ids = {str(record.get("company_id", "")).strip() for record in records}
+    return len([company_id for company_id in company_ids if company_id])
+
+
 def monthly_revenue_company_count(records: list[dict[str, Any]]) -> int:
     company_ids = {str(record.get("company_id", "")).strip() for record in records}
     return len([company_id for company_id in company_ids if company_id])
@@ -505,6 +603,26 @@ def latest_monthly_revenue_detected_record(records: list[dict[str, Any]]) -> dic
 
 
 def newest_monthly_revenue_detected_at_iso(records: list[dict[str, Any]]) -> str:
+    candidates: list[tuple[float, datetime]] = []
+    for record in records:
+        detected_at = str(record.get("detected_at", "")).strip()
+        if not detected_at:
+            continue
+        try:
+            parsed = datetime.fromisoformat(detected_at.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=TAIWAN_TZ)
+        else:
+            parsed = parsed.astimezone(TAIWAN_TZ)
+        candidates.append((parsed.timestamp(), parsed))
+    if not candidates:
+        return ""
+    return max(candidates, key=lambda item: item[0])[1].isoformat(timespec="seconds")
+
+
+def newest_detected_at_iso(records: list[dict[str, Any]]) -> str:
     candidates: list[tuple[float, datetime]] = []
     for record in records:
         detected_at = str(record.get("detected_at", "")).strip()
@@ -905,6 +1023,125 @@ def format_monthly_revenue_cache_source(cache_file: Path, records: list[dict[str
     return " ｜ ".join(parts)
 
 
+def financial_report_cache_meta_path(cache_file: Path | None = None) -> Path:
+    cache_path = cache_file or default_financial_report_output_path()
+    if cache_path.name == default_financial_report_output_path().name:
+        return cache_path.with_name(default_financial_report_meta_path().name)
+    return cache_path.with_name(f"{cache_path.stem}_meta.json")
+
+
+def load_financial_report_cache_meta(cache_file: Path | None = None) -> dict[str, Any]:
+    meta_path = financial_report_cache_meta_path(cache_file)
+    if not meta_path.exists():
+        return {}
+    try:
+        payload = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def save_financial_report_cache_meta(cache_file: Path, meta: Mapping[str, Any]) -> None:
+    meta_path = financial_report_cache_meta_path(cache_file)
+    meta_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = meta_path.with_name(f"{meta_path.name}.tmp")
+    temp_path.write_text(
+        json.dumps(dict(meta), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    temp_path.replace(meta_path)
+
+
+def build_financial_report_cache_meta(
+    cache_file: Path,
+    records: list[dict[str, Any]],
+    **fields: Any,
+) -> dict[str, Any]:
+    financial_records = [record for record in records if is_financial_report_record(record)]
+    target_quarter = str(fields.get("target_quarter") or "").strip() or None
+    display_records = select_display_financial_report_records(financial_records, target_quarter)
+    display_quarter = str(display_records[0].get("quarter", "")) if display_records else ""
+    meta: dict[str, Any] = {
+        "schema_version": 1,
+        "cache_file": str(cache_file),
+        "source_label": "MOPS 重大訊息財報 + 持久化快取",
+        "record_count": len(records),
+        "financial_report_record_count": len(financial_records),
+        "display_record_count": len(display_records),
+        "display_company_count": financial_report_company_count(display_records),
+        "target_quarter": target_quarter or "",
+        "display_quarter": display_quarter,
+        "newest_announced_at": newest_event_time_iso(financial_records),
+        "newest_detected_at": newest_detected_at_iso(financial_records),
+    }
+    meta.update(fields)
+    return meta
+
+
+def update_financial_report_cache_meta(
+    cache_file: Path,
+    records: list[dict[str, Any]] | None = None,
+    **fields: Any,
+) -> dict[str, Any]:
+    meta = load_financial_report_cache_meta(cache_file)
+    if records is not None:
+        meta.update(build_financial_report_cache_meta(cache_file, records, **fields))
+    else:
+        meta.update({"schema_version": 1, "cache_file": str(cache_file)})
+    meta.update(fields)
+    save_financial_report_cache_meta(cache_file, meta)
+    return meta
+
+
+def format_financial_report_cache_source(
+    cache_file: Path,
+    records: list[dict[str, Any]],
+    *,
+    target_quarter: str | None = None,
+) -> str:
+    meta = load_financial_report_cache_meta(cache_file)
+    source_label = str(meta.get("source_label") or "MOPS 重大訊息財報 + 持久化快取")
+    financial_records = [record for record in records if is_financial_report_record(record)]
+    display_target_quarter = target_quarter or str(meta.get("target_quarter") or "").strip() or None
+    display_records = select_display_financial_report_records(
+        financial_records,
+        display_target_quarter,
+    )
+    display_quarter = str(display_records[0].get("quarter", "")) if display_records else ""
+    if not display_quarter:
+        display_quarter = str(meta.get("display_quarter") or "").strip()
+    latest_update = format_meta_time(meta.get("last_success_at") or meta.get("seeded_at"))
+    newest_announced_at = format_meta_time(
+        meta.get("newest_announced_at") or newest_event_time_iso(financial_records)
+    )
+    newest_detected_at = format_meta_time(
+        meta.get("newest_detected_at") or newest_detected_at_iso(financial_records)
+    )
+    parts = [source_label]
+    if display_quarter:
+        parts.append(f"財報季度：{display_quarter}")
+    if latest_update:
+        parts.append(f"最新更新：{latest_update}")
+    if newest_announced_at:
+        parts.append(f"最新公告：{newest_announced_at}")
+    if newest_detected_at:
+        parts.append(f"最新偵測：{newest_detected_at}")
+    if meta.get("fetch_error_count"):
+        parts.append("部分查詢日更新失敗")
+    if meta.get("last_error"):
+        parts.append("最近更新失敗")
+    return " ｜ ".join(parts)
+
+
+def load_json_records(path: Path) -> list[dict[str, Any]]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(payload, list):
+        return [record for record in payload if isinstance(record, dict)]
+    if isinstance(payload, dict) and isinstance(payload.get("records"), list):
+        return [record for record in payload["records"] if isinstance(record, dict)]
+    return []
+
+
 def range_cache_seed_candidates(data_dir: Path) -> list[Path]:
     if not data_dir.exists():
         return []
@@ -922,6 +1159,16 @@ def select_range_cache_seed_file(data_dir: Path) -> Path | None:
         return None
     preferred = [path for path in candidates if "financial_self_report" in path.name]
     return max(preferred or candidates, key=lambda path: path.stat().st_mtime)
+
+
+def select_financial_report_seed_file(data_dir: Path) -> Path | None:
+    if not data_dir.exists():
+        return None
+    active_seed = data_dir / default_financial_report_output_path().name
+    if active_seed.exists():
+        return active_seed
+    candidates = list(data_dir.glob("financial_report_demo_cache*.json"))
+    return max(candidates, key=lambda path: path.stat().st_mtime) if candidates else None
 
 
 def find_range_cache_file(data_dir: Path | None = None) -> Path | None:
@@ -946,6 +1193,7 @@ def seed_persistent_cache_files(
     bundled_seed = select_range_cache_seed_file(source_raw_dir) if source_raw_dir.exists() else None
     range_seed_source = existing_target_seed or bundled_seed
     monthly_seed = source_raw_dir / "monthly_revenue_latest.json" if source_raw_dir.exists() else None
+    financial_seed = select_financial_report_seed_file(source_raw_dir) if source_raw_dir.exists() else None
 
     seeded_paths: list[Path] = []
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -997,6 +1245,32 @@ def seed_persistent_cache_files(
             )
             save_monthly_revenue_cache_meta(target_monthly, meta)
             seeded_paths.append(target_monthly_meta)
+
+    if financial_seed is not None and financial_seed.exists():
+        target_financial = target_dir / default_financial_report_output_path().name
+        target_financial_meta = financial_report_cache_meta_path(target_financial)
+        if not target_financial.exists():
+            records = load_json_records(financial_seed)
+            save_records(records, target_financial)
+            meta = build_financial_report_cache_meta(
+                target_financial,
+                records,
+                seed_file=str(financial_seed),
+                seeded_at=taiwan_now_iso(),
+                last_error=None,
+            )
+            save_financial_report_cache_meta(target_financial, meta)
+            seeded_paths.extend([target_financial, target_financial_meta])
+        elif not target_financial_meta.exists():
+            records = load_json_records(target_financial)
+            meta = build_financial_report_cache_meta(
+                target_financial,
+                records,
+                created_at=taiwan_now_iso(),
+                last_error=None,
+            )
+            save_financial_report_cache_meta(target_financial, meta)
+            seeded_paths.append(target_financial_meta)
     return seeded_paths
 
 
@@ -1285,7 +1559,7 @@ def render_financial_report_table(records: list[dict[str, Any]]) -> str:
         rows.append(
             f"""
             <tr class="eps-group-row">
-              <td colspan="10">{html.escape(section_title)}</td>
+              <td colspan="9">{html.escape(section_title)}</td>
             </tr>
             """
         )
@@ -1293,7 +1567,7 @@ def render_financial_report_table(records: list[dict[str, Any]]) -> str:
             rows.append(
                 """
                 <tr class="eps-empty-row">
-                  <td colspan="10">目前沒有符合條件的公告。</td>
+                  <td colspan="9">目前沒有符合條件的公告。</td>
                 </tr>
                 """
             )
@@ -1305,30 +1579,28 @@ def render_financial_report_table(records: list[dict[str, Any]]) -> str:
             detail_index += 1
             title = str(record.get("title") or record.get("subject") or "")
             source_label = str(record.get("source_label") or "")
-            operating_revenue = financial_metric(record, "operating_revenue")
-            gross_profit = financial_metric(record, "gross_profit")
-            operating_income = financial_metric(record, "operating_income")
-            pre_tax_income = financial_metric(record, "pre_tax_income")
-            parent_net_income = financial_metric(record, "parent_net_income")
+            quarter = str(financial_metric(record, "quarter") or record.get("quarter") or "")
             eps = financial_metric(record, "eps")
+            gross_margin = financial_metric(record, "gross_margin_pct")
+            operating_margin = financial_metric(record, "operating_margin_pct")
+            non_operating = financial_metric(record, "non_operating_pct")
             rows.append(
                 f"""
                 <tr class="eps-data-row" data-detail-target="{detail_id}" tabindex="0" aria-expanded="false">
                   <td class="time-cell" data-label="時間"{sort_value_attr(event_sort_value(record))}>{html.escape(format_event_table_time(record))}</td>
                   <td class="code-cell" data-label="代號"{sort_value_attr(record.get("company_id", ""))}>{html.escape(str(record.get("company_id", "")))}</td>
                   <td class="name-cell" data-label="名稱"{sort_value_attr(record.get("company_name", ""))}>{html.escape(str(record.get("company_name", "")))}</td>
-                  <td class="metric-cell primary-metric" data-label="營收(M)"{sort_value_attr(metric_sort_value(operating_revenue))}>{render_money_millions(operating_revenue)}</td>
-                  <td class="metric-cell" data-label="毛利(M)"{sort_value_attr(metric_sort_value(gross_profit))}>{render_money_millions(gross_profit)}</td>
-                  <td class="metric-cell" data-label="營益(M)"{sort_value_attr(metric_sort_value(operating_income))}>{render_money_millions(operating_income)}</td>
-                  <td class="metric-cell" data-label="稅前(M)"{sort_value_attr(metric_sort_value(pre_tax_income))}>{render_money_millions(pre_tax_income)}</td>
-                  <td class="metric-cell" data-label="歸母(M)"{sort_value_attr(metric_sort_value(parent_net_income))}>{render_money_millions(parent_net_income)}</td>
+                  <td class="metric-cell" data-label="季度"{sort_value_attr(quarter)}>{html.escape(quarter or "-")}</td>
                   <td class="metric-cell" data-label="EPS"{sort_value_attr(metric_sort_value(eps))}>{render_metric(eps)}</td>
+                  <td class="metric-cell" data-label="毛利率"{sort_value_attr(metric_sort_value(gross_margin))}>{render_percent_value(gross_margin)}</td>
+                  <td class="metric-cell" data-label="營益率"{sort_value_attr(metric_sort_value(operating_margin))}>{render_percent_value(operating_margin)}</td>
+                  <td class="metric-cell" data-label="業外%"{sort_value_attr(metric_sort_value(non_operating))}>{render_percent_value(non_operating)}</td>
                   <td class="detail-cell compact-detail-cell" data-label="原文"{sort_value_attr(title or description)}>
                     <button class="detail-toggle" type="button" aria-controls="{detail_id}" aria-expanded="false">詳細原文</button>
                   </td>
                 </tr>
                 <tr class="eps-detail-panel-row" id="{detail_id}" hidden>
-                  <td colspan="10">
+                  <td colspan="9">
                     <section class="detail-panel" aria-label="財報詳細原文">
                       <div class="detail-subject">{html.escape(title)}</div>
                       <div class="detail-meta-line">{html.escape(source_label or '-')} ｜ 時間：{html.escape(display_event_time(record))}</div>
@@ -1344,12 +1616,11 @@ def render_financial_report_table(records: list[dict[str, Any]]) -> str:
             ("時間", "time"),
             ("代號", "text"),
             ("名稱", "text"),
-            ("營收(M)", "number"),
-            ("毛利(M)", "number"),
-            ("營益(M)", "number"),
-            ("稅前(M)", "number"),
-            ("歸母(M)", "number"),
+            ("季度", "text"),
             ("EPS", "number"),
+            ("毛利率", "number"),
+            ("營益率", "number"),
+            ("業外%", "number"),
             ("原文", "text"),
         ]
     )
@@ -2431,6 +2702,9 @@ class DashboardServer:
         monthly_revenue_market: str = "all",
         monthly_revenue_roc_year: int | None = None,
         monthly_revenue_month: int | None = None,
+        financial_report_output_path: Path = DEFAULT_FINANCIAL_REPORT_OUTPUT_PATH,
+        financial_report_target_quarter: str | None = None,
+        financial_report_lookback_days: int = DEFAULT_FINANCIAL_REPORT_LOOKBACK_DAYS,
     ) -> None:
         self.crawler = crawler
         self.monthly_revenue_crawler = monthly_revenue_crawler or MonthlyRevenueCrawler(
@@ -2441,6 +2715,7 @@ class DashboardServer:
         self.output_path = output_path
         self.previous_output_path = previous_output_path
         self.monthly_revenue_output_path = monthly_revenue_output_path
+        self.financial_report_output_path = financial_report_output_path
         self.mode = mode
         self.category = category
         self.range_cache_file = range_cache_file
@@ -2457,6 +2732,8 @@ class DashboardServer:
         self.monthly_revenue_market = monthly_revenue_market
         self.monthly_revenue_roc_year = monthly_revenue_roc_year
         self.monthly_revenue_month = monthly_revenue_month
+        self.financial_report_target_quarter = financial_report_target_quarter
+        self.financial_report_lookback_days = financial_report_lookback_days
 
     def get_records(
         self,
@@ -2506,7 +2783,7 @@ class DashboardServer:
         return records, source_record["source"]
 
     def _load_offline_records(self, path: Path) -> list[dict[str, Any]]:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return load_json_records(path)
 
     def _get_recent_financial_records(self) -> tuple[list[dict[str, Any]], str]:
         cache_file = self.range_cache_file or find_range_cache_file()
@@ -2583,10 +2860,40 @@ class DashboardServer:
         self,
         search_query: str = "",
     ) -> tuple[list[dict[str, Any]], str]:
-        records, source = self._get_monthly_signal_records()
-        records = [record for record in records if is_financial_report_record(record)]
+        now = time.monotonic()
+        cache_key = TAB_FINANCIAL_REPORT
+        target_quarter = self._current_financial_report_target_quarter()
+        if (
+            cache_key not in self.cache_records
+            or now - self.cache_at.get(cache_key, 0.0) >= self.refresh_seconds
+        ):
+            if self.financial_report_output_path.exists():
+                cached_records = self._load_offline_records(self.financial_report_output_path)
+                self.cache_records[cache_key] = sort_event_records(cached_records)
+                self.cache_records[f"{cache_key}:source"] = [
+                    {
+                        "source": format_financial_report_cache_source(
+                            self.financial_report_output_path,
+                            cached_records,
+                            target_quarter=target_quarter,
+                        )
+                    }
+                ]
+            else:
+                self.cache_records[cache_key] = []
+                self.cache_records[f"{cache_key}:source"] = [
+                    {"source": f"financial report cache not found: {self.financial_report_output_path}"}
+                ]
+            self.cache_at[cache_key] = now
+
+        records = [record for record in self.cache_records.get(cache_key, []) if is_financial_report_record(record)]
+        records = select_display_financial_report_records(records, target_quarter)
         records = filter_monthly_records_by_company_id(records, search_query)
-        return records, source
+        source_record = self.cache_records.get(
+            f"{cache_key}:source",
+            [{"source": "MOPS financial report cache"}],
+        )[0]
+        return records, source_record["source"]
 
     def _monthly_revenue_summary_markets(self) -> list[str]:
         if self.monthly_revenue_market == "all":
@@ -2599,6 +2906,151 @@ class DashboardServer:
             self.monthly_revenue_roc_year or default_roc_year,
             self.monthly_revenue_month or default_month,
         )
+
+    def _current_financial_report_target_quarter(self) -> str:
+        return self.financial_report_target_quarter or default_financial_report_target_quarter()
+
+    def _financial_report_update_dates(
+        self,
+        lookback_days: int | None = None,
+        reference_date: date | None = None,
+    ) -> list[date]:
+        days = max(1, lookback_days or self.financial_report_lookback_days)
+        end_date = reference_date or taiwan_now().date()
+        start_date = end_date - timedelta(days=days - 1)
+        return [start_date + timedelta(days=offset) for offset in range(days)]
+
+    def update_financial_report_cache(
+        self,
+        target_quarter: str | None = None,
+        lookback_days: int | None = None,
+        reference_date: date | None = None,
+    ) -> dict[str, Any]:
+        cache_file = self.financial_report_output_path
+        update_started_at = taiwan_now_iso()
+        selected_target_quarter = target_quarter or self._current_financial_report_target_quarter()
+        query_dates = self._financial_report_update_dates(lookback_days, reference_date)
+        announcement_roc_dates = {iso_date_to_roc_label(value) for value in query_dates}
+        fetch_summaries: list[dict[str, Any]] = []
+        fetch_errors: list[str] = []
+        latest_records: list[dict[str, Any]] = []
+
+        try:
+            existing_records = self._load_offline_records(cache_file) if cache_file.exists() else []
+            before_count = len(dedupe_financial_report_records(existing_records))
+            for query_date in query_dates:
+                try:
+                    summaries = self.crawler.fetch_previous_day_summaries(
+                        target_date=query_date,
+                        market="all",
+                    )
+                except Exception as exc:
+                    error_text = f"{query_date.isoformat()}: {type(exc).__name__}: {exc}"
+                    fetch_errors.append(error_text)
+                    fetch_summaries.append(
+                        {
+                            "query_date": query_date.isoformat(),
+                            "row_count": 0,
+                            "spoke_date_counts": {},
+                            "error": error_text,
+                        }
+                    )
+                    continue
+
+                fetch_summaries.append(
+                    {
+                        "query_date": query_date.isoformat(),
+                        "row_count": len(summaries),
+                        "spoke_date_counts": dict(
+                            Counter(str(row.get("spoke_date_roc", "")) for row in summaries)
+                        ),
+                    }
+                )
+                for summary in summaries:
+                    if str(summary.get("spoke_date_roc", "")) not in announcement_roc_dates:
+                        continue
+                    record = build_financial_report_record(
+                        summary,
+                        target_quarter=selected_target_quarter,
+                        detected_at=update_started_at,
+                    )
+                    if record is not None:
+                        latest_records.append(record)
+
+            if fetch_errors and len(fetch_errors) == len(query_dates):
+                raise RuntimeError("; ".join(fetch_errors))
+
+            merged_records = dedupe_financial_report_records([*latest_records, *existing_records])
+            merged_records = sort_event_records(merged_records)
+            save_records(merged_records, cache_file)
+            meta = update_financial_report_cache_meta(
+                cache_file,
+                merged_records,
+                target_quarter=selected_target_quarter,
+                query_dates=[value.isoformat() for value in query_dates],
+                announcement_roc_dates=sorted(announcement_roc_dates),
+                fetch_summaries=fetch_summaries,
+                fetch_errors=fetch_errors,
+                fetch_error_count=len(fetch_errors),
+                degraded=bool(fetch_errors),
+                last_update_started_at=update_started_at,
+                last_success_at=taiwan_now_iso(),
+                last_error=None,
+                fetched_count=len(latest_records),
+                before_count=before_count,
+                after_count=len(merged_records),
+                new_count=max(len(merged_records) - before_count, 0),
+            )
+            self.cache_records[TAB_FINANCIAL_REPORT] = merged_records
+            self.cache_records[f"{TAB_FINANCIAL_REPORT}:source"] = [
+                {
+                    "source": format_financial_report_cache_source(
+                        cache_file,
+                        merged_records,
+                        target_quarter=selected_target_quarter,
+                    )
+                }
+            ]
+            self.cache_at[TAB_FINANCIAL_REPORT] = time.monotonic()
+            return {
+                "ok": not fetch_errors,
+                "degraded": bool(fetch_errors),
+                "source": format_financial_report_cache_source(
+                    cache_file,
+                    merged_records,
+                    target_quarter=selected_target_quarter,
+                ),
+                "cache_file": str(cache_file),
+                "meta_file": str(financial_report_cache_meta_path(cache_file)),
+                "target_quarter": selected_target_quarter,
+                "display_quarter": meta.get("display_quarter", ""),
+                "query_dates": [value.isoformat() for value in query_dates],
+                "fetched_count": len(latest_records),
+                "before_count": before_count,
+                "after_count": len(merged_records),
+                "new_count": max(len(merged_records) - before_count, 0),
+                "fetch_error_count": len(fetch_errors),
+                "fetch_errors": fetch_errors,
+                "updated_at": meta.get("last_success_at", ""),
+                "newest_announced_at": meta.get("newest_announced_at", ""),
+            }
+        except Exception as exc:
+            existing_records = self._load_offline_records(cache_file) if cache_file.exists() else []
+            update_financial_report_cache_meta(
+                cache_file,
+                existing_records,
+                target_quarter=selected_target_quarter,
+                query_dates=[value.isoformat() for value in query_dates],
+                announcement_roc_dates=sorted(announcement_roc_dates),
+                fetch_summaries=fetch_summaries,
+                fetch_errors=fetch_errors,
+                fetch_error_count=len(fetch_errors),
+                degraded=True,
+                last_update_started_at=update_started_at,
+                last_failed_at=taiwan_now_iso(),
+                last_error=f"{type(exc).__name__}: {exc}",
+            )
+            raise
 
     def update_monthly_revenue_summary_cache(self) -> dict[str, Any]:
         cache_file = self.monthly_revenue_output_path
@@ -2879,6 +3331,38 @@ def build_handler(dashboard: DashboardServer) -> type[BaseHTTPRequestHandler]:
                     )
                 return
 
+            if path == FINANCIAL_REPORT_UPDATE_API_PATH:
+                if not self._is_update_authorized(query):
+                    self._send_json(
+                        {
+                            "ok": False,
+                            "error": "unauthorized",
+                            "message": f"Set {UPDATE_TOKEN_ENV} and send it with Authorization: Bearer <token>.",
+                        },
+                        status=401,
+                    )
+                    return
+                try:
+                    lookback_days = None
+                    if query.get("lookback_days"):
+                        lookback_days = max(1, int(query["lookback_days"]))
+                    self._send_json(
+                        dashboard.update_financial_report_cache(
+                            target_quarter=query.get("target_quarter") or None,
+                            lookback_days=lookback_days,
+                        )
+                    )
+                except Exception as exc:  # pragma: no cover - live endpoint.
+                    self._send_json(
+                        {
+                            "ok": False,
+                            "error": "financial_report_update_failed",
+                            "message": str(exc),
+                        },
+                        status=502,
+                    )
+                return
+
             if path in {"/", "/index.html"}:
                 mode = MODE_RECENT_FINANCIAL
                 category = CATEGORY_FINANCIAL_SELF_REPORT
@@ -3089,6 +3573,9 @@ def serve_command(args: argparse.Namespace) -> None:
         monthly_revenue_market=args.monthly_revenue_market,
         monthly_revenue_roc_year=args.monthly_revenue_year,
         monthly_revenue_month=args.monthly_revenue_month,
+        financial_report_output_path=args.financial_report_cache_file,
+        financial_report_target_quarter=args.financial_report_target_quarter,
+        financial_report_lookback_days=args.financial_report_lookback_days,
     )
     server = ThreadingHTTPServer((args.host, args.port), build_handler(dashboard))
     print(f"Serving dashboard at http://{args.host}:{args.port}")
@@ -3208,6 +3695,22 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--monthly-revenue-market", default="all", choices=["all", "sii", "otc", "rotc", "pub"])
     serve.add_argument("--monthly-revenue-year", type=int, help="ROC year for the watched monthly revenue data")
     serve.add_argument("--monthly-revenue-month", type=int, help="Month for the watched monthly revenue data")
+    serve.add_argument(
+        "--financial-report-cache-file",
+        type=Path,
+        default=env_path(FINANCIAL_REPORT_CACHE_FILE_ENV) or default_financial_report_output_path(),
+    )
+    serve.add_argument(
+        "--financial-report-target-quarter",
+        default=os.environ.get(FINANCIAL_REPORT_TARGET_QUARTER_ENV, "").strip() or None,
+        help="Target quarter for financial-report updates, e.g. 2026Q1",
+    )
+    serve.add_argument(
+        "--financial-report-lookback-days",
+        type=int,
+        default=env_int(FINANCIAL_REPORT_LOOKBACK_DAYS_ENV, DEFAULT_FINANCIAL_REPORT_LOOKBACK_DAYS),
+        help="Number of recent MOPS query dates scanned by financial-report updates",
+    )
     serve.add_argument(
         "--allow-unprotected-local-update",
         action="store_true",

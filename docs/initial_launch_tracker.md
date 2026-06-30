@@ -20,6 +20,8 @@ PORT=<platform-port>
 TWSE_DASHBOARD_DATA_ROOT=/data
 TWSE_DASHBOARD_RANGE_CACHE_FILE=/data/raw/material_info_2026-06-01_2026-06-27_financial_self_report.json
 TWSE_DASHBOARD_MONTHLY_REVENUE_CACHE_FILE=/data/raw/monthly_revenue_latest.json
+TWSE_DASHBOARD_FINANCIAL_REPORT_CACHE_FILE=/data/raw/financial_report_latest.json
+TWSE_DASHBOARD_FINANCIAL_REPORT_LOOKBACK_DAYS=3
 TWSE_DASHBOARD_UPDATE_MIN_INTERVAL=300
 TWSE_DASHBOARD_UPDATE_TOKEN=<secret-token>
 TWSE_DASHBOARD_RECENT_DAYS=7
@@ -38,11 +40,11 @@ TWSE_DASHBOARD_UPDATE_TOKEN=<same-secret-token-as-zeabur>
 | Item | Status | Implementation |
 | --- | --- | --- |
 | Zeabur Dockerfile | Done | `Dockerfile` uses `WORKDIR /app` and explicitly starts `/app/src/main.py`, avoiding Zeabur's default `/app/main.py` lookup. |
-| GitHub Actions workflow | Done | `.github/workflows/dashboard-update.yml` calls `/api/admin/update` and `/api/admin/update-monthly-revenue`. |
+| GitHub Actions workflow | Done | `.github/workflows/dashboard-update.yml` calls `/api/admin/update`, `/api/admin/update-monthly-revenue`, and `/api/admin/update-financial-report`. |
 | Zeabur persistent cache path | Done | Production defaults now write to `/data/raw/...`; `TWSE_DASHBOARD_DATA_ROOT` can override the root. |
 | Zeabur Volume mount | Manual | Mount a Zeabur Volume at `/data` before enabling the scheduler. |
-| Initial cache seed | Done | Startup seed copies missing bundled `data/raw/material_info_*.json` and `data/raw/monthly_revenue_latest.json` into `/data/raw`. |
-| Seed cache tracked by Git | Done | `.gitignore` allows the self-report seed JSON and monthly revenue seed JSON into Git/Docker image. |
+| Initial cache seed | Done | Startup seed copies missing bundled `data/raw/material_info_*.json`, `data/raw/monthly_revenue_latest.json`, and optional `data/raw/financial_report_latest.json` into `/data/raw`. |
+| Seed cache tracked by Git | Done | `.gitignore` allows the self-report seed JSON, monthly revenue seed JSON, and optional financial report seed JSON into Git/Docker image. |
 | Seed overwrite protection | Done | Startup seed does not overwrite existing `/data/raw` cache files. |
 | GitHub secrets | Manual | Add `TWSE_DASHBOARD_BASE_URL` and `TWSE_DASHBOARD_UPDATE_TOKEN`. |
 | First live update verification | Todo | Manually run the workflow and confirm both update endpoints return `ok: true` or cooldown `skipped: true`. |
@@ -58,6 +60,7 @@ Endpoints called:
 ```text
 POST /api/admin/update
 POST /api/admin/update-monthly-revenue
+POST /api/admin/update-financial-report
 ```
 
 Both use:
@@ -72,11 +75,13 @@ Bundled repo seed files:
 
 - `data/raw/material_info_2026-06-01_2026-06-27_financial_self_report.json`
 - `data/raw/monthly_revenue_latest.json`
+- optional `data/raw/financial_report_latest.json`
 
 Runtime target files:
 
 - `/data/raw/material_info_2026-06-01_2026-06-27_financial_self_report.json`
 - `/data/raw/monthly_revenue_latest.json`
+- `/data/raw/financial_report_latest.json`
 
 The seed is intentionally one-way and non-destructive:
 
@@ -97,5 +102,5 @@ TWSE_DASHBOARD_SEED_CACHE_ON_START=0
 3. Configure GitHub Actions secrets.
 4. Deploy Zeabur and confirm `/health`.
 5. Run `dashboard-update.yml` manually once.
-6. Check `/api/news?tab=material-info` and `/api/news?tab=monthly-revenue`.
+6. Check `/api/news?tab=material-info`, `/api/news?tab=monthly-revenue`, and `/api/news?tab=financial-report`.
 7. Let the scheduled workflow run at least once inside `07:00-23:00 Asia/Taipei` and inspect logs.
