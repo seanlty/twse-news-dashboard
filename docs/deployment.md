@@ -94,13 +94,19 @@ TWSE_DASHBOARD_SEED_CACHE_ON_START=0
 
 ## Scheduler reminder
 
-When moving to production, run the update request every 5 minutes during the active monitoring window:
+When moving to production, run all update endpoints every 5 minutes during the active monitoring window:
 
 ```text
 07:00-23:00 Asia/Taipei
 ```
 
-The scheduler can be a host cron, GitHub Actions, or an external cron service. The dashboard server already has a 300 second cooldown on `/api/admin/update`, so accidental repeated calls should not immediately hammer MOPS.
+The repo includes `.github/workflows/dashboard-update.yml` for GitHub Actions. GitHub cron is UTC, so the workflow annotates the UTC-to-`Asia/Taipei` mapping and keeps an in-job `Asia/Taipei` safety gate. The scheduler calls:
+
+- `POST /api/admin/update`
+- `POST /api/admin/update-monthly-revenue`
+- `POST /api/admin/update-financial-report`
+
+A host cron or external cron service can still be used as a backup. The dashboard server already has a 300 second cooldown on `/api/admin/update`, so accidental repeated calls should not immediately hammer MOPS.
 
 ## Monthly Revenue Scheduler Memo
 

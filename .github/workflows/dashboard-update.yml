@@ -2,7 +2,13 @@ name: Dashboard scheduled updates
 
 on:
   schedule:
-    - cron: "*/5 23,0-15 * * *"
+    # GitHub cron is UTC. These schedules cover 07:00-23:00 Asia/Taipei (UTC+8).
+    # 23:00-23:55 UTC = 07:00-07:55 Asia/Taipei.
+    - cron: "*/5 23 * * *"
+    # 00:00-14:55 UTC = 08:00-22:55 Asia/Taipei.
+    - cron: "*/5 0-14 * * *"
+    # 15:00 UTC = 23:00 Asia/Taipei.
+    - cron: "0 15 * * *"
   workflow_dispatch:
 
 concurrency:
@@ -27,6 +33,7 @@ jobs:
 
           now = datetime.now(ZoneInfo("Asia/Taipei"))
           manual = os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
+          # Safety gate in Asia/Taipei time. Manual dispatch always runs.
           in_window = time(7, 0) <= now.time().replace(tzinfo=None) <= time(23, 0)
           should_run = manual or in_window
 
@@ -44,7 +51,7 @@ jobs:
           test -n "$DASHBOARD_BASE_URL"
           test -n "$UPDATE_TOKEN"
 
-      - name: Update self-reported EPS cache
+      - name: Update material info and self-reported cache
         if: steps.window.outputs.should_run == 'true'
         shell: bash
         run: |

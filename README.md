@@ -102,7 +102,7 @@ python src/main.py enrich-cache data/raw/material_info_2026-06-01_2026-06-27.jso
 
 Deployment reminder: see `docs/deployment.md` before production setup.
 
-排程本身先不放在專案內。未來可以用主機 Cron、GitHub Actions、或外部 cron service 在 07:00-23:00 每 5 分鐘打一次：
+專案內已提供 GitHub Actions workflow：`.github/workflows/dashboard-update.yml`。GitHub cron 使用 UTC，但 workflow 已特別註記並轉換成 `07:00-23:00 Asia/Taipei`，每 5 分鐘依序打三個更新節點：
 
 ```powershell
 $env:TWSE_DASHBOARD_UPDATE_TOKEN="dev-token"

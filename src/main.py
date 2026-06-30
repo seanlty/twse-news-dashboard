@@ -496,6 +496,13 @@ def financial_report_quarter_key(value: Any) -> tuple[int, int] | None:
     return int(match.group(1)), int(match.group(2))
 
 
+def format_financial_report_quarter(value: Any) -> str:
+    quarter_key = financial_report_quarter_key(value)
+    if quarter_key is None:
+        return str(value or "").strip() or "-"
+    return f"Q{quarter_key[1]}"
+
+
 def financial_report_record_quarter_key(record: dict[str, Any]) -> tuple[int, int] | None:
     return financial_report_quarter_key(record.get("quarter", ""))
 
@@ -1119,7 +1126,7 @@ def format_financial_report_cache_source(
     )
     parts = [source_label]
     if display_quarter:
-        parts.append(f"財報季度：{display_quarter}")
+        parts.append(f"財報季度：{format_financial_report_quarter(display_quarter)}")
     if latest_update:
         parts.append(f"最新更新：{latest_update}")
     if newest_announced_at:
@@ -1580,6 +1587,7 @@ def render_financial_report_table(records: list[dict[str, Any]]) -> str:
             title = str(record.get("title") or record.get("subject") or "")
             source_label = str(record.get("source_label") or "")
             quarter = str(financial_metric(record, "quarter") or record.get("quarter") or "")
+            quarter_label = format_financial_report_quarter(quarter)
             eps = financial_metric(record, "eps")
             gross_margin = financial_metric(record, "gross_margin_pct")
             operating_margin = financial_metric(record, "operating_margin_pct")
@@ -1590,7 +1598,7 @@ def render_financial_report_table(records: list[dict[str, Any]]) -> str:
                   <td class="time-cell" data-label="時間"{sort_value_attr(event_sort_value(record))}>{html.escape(format_event_table_time(record))}</td>
                   <td class="code-cell" data-label="代號"{sort_value_attr(record.get("company_id", ""))}>{html.escape(str(record.get("company_id", "")))}</td>
                   <td class="name-cell" data-label="名稱"{sort_value_attr(record.get("company_name", ""))}>{html.escape(str(record.get("company_name", "")))}</td>
-                  <td class="metric-cell" data-label="季度"{sort_value_attr(quarter)}>{html.escape(quarter or "-")}</td>
+                  <td class="metric-cell" data-label="季度"{sort_value_attr(quarter)}>{html.escape(quarter_label)}</td>
                   <td class="metric-cell" data-label="EPS"{sort_value_attr(metric_sort_value(eps))}>{render_metric(eps)}</td>
                   <td class="metric-cell" data-label="毛利率"{sort_value_attr(metric_sort_value(gross_margin))}>{render_percent_value(gross_margin)}</td>
                   <td class="metric-cell" data-label="營益率"{sort_value_attr(metric_sort_value(operating_margin))}>{render_percent_value(operating_margin)}</td>

@@ -47,13 +47,21 @@ TWSE_DASHBOARD_UPDATE_TOKEN=<same-secret-token-as-zeabur>
 | Seed cache tracked by Git | Done | `.gitignore` allows the self-report seed JSON, monthly revenue seed JSON, and optional financial report seed JSON into Git/Docker image. |
 | Seed overwrite protection | Done | Startup seed does not overwrite existing `/data/raw` cache files. |
 | GitHub secrets | Manual | Add `TWSE_DASHBOARD_BASE_URL` and `TWSE_DASHBOARD_UPDATE_TOKEN`. |
-| First live update verification | Todo | Manually run the workflow and confirm both update endpoints return `ok: true` or cooldown `skipped: true`. |
+| First live update verification | Todo | Manually run the workflow and confirm all three update endpoints return `ok: true` or cooldown `skipped: true`. |
 | Health check | Todo | Confirm `GET /health` returns `ok` on the deployed domain. |
 | Data check | Todo | Confirm `/api/news?tab=monthly-revenue` and `/api/news?tab=material-info` return records after deploy. |
 
 ## GitHub Actions Behavior
 
-The workflow runs every 5 minutes during the intended UTC range and then checks Taipei local time inside the job. It proceeds only during `07:00-23:00 Asia/Taipei`, or when manually triggered with `workflow_dispatch`.
+The workflow is scheduled in UTC because GitHub Actions cron uses UTC, but the intended monitoring window is explicitly `07:00-23:00 Asia/Taipei`.
+
+Current schedule:
+
+- `*/5 23 * * *`: `07:00-07:55 Asia/Taipei`
+- `*/5 0-14 * * *`: `08:00-22:55 Asia/Taipei`
+- `0 15 * * *`: `23:00 Asia/Taipei`
+
+The job also checks `Asia/Taipei` local time inside the workflow as a safety gate. It proceeds only during `07:00-23:00 Asia/Taipei`, or when manually triggered with `workflow_dispatch`.
 
 Endpoints called:
 

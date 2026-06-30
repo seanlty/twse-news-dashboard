@@ -839,12 +839,12 @@ def test_financial_report_tab_renders_financial_records(tmp_path: Path) -> None:
     assert "4739" in html
     assert "康普" in html
     assert "本公司董事會通過115年第一季合併財務報告" in html
-    assert "2026Q1" in html
+    assert ">Q1</td>" in html
     assert "1.51" in html
     assert "17.93%" in html
     assert "13.23%" in html
     assert "-10.42%" in html
-    assert "財報季度：2026Q1" in html
+    assert "財報季度：Q1" in html
     assert "data-sortable-table" in html
     assert 'data-sort-type="time"' in html
     assert "1,026.9" not in html
@@ -886,7 +886,7 @@ def test_financial_report_tab_only_displays_latest_quarter(tmp_path: Path) -> No
 
     assert "新季" in html
     assert "舊季" not in html
-    assert "財報季度：2026Q1" in html
+    assert "財報季度：Q1" in html
 
 
 def test_financial_report_tab_falls_back_to_previous_quarter_until_target_arrives(tmp_path: Path) -> None:
@@ -935,7 +935,7 @@ def test_financial_report_tab_falls_back_to_previous_quarter_until_target_arrive
     assert "上一季一" in html
     assert "上一季二" in html
     assert "更舊季" not in html
-    assert "財報季度：2026Q1" in html
+    assert "財報季度：Q1" in html
 
 
 def test_financial_report_tab_switches_to_target_quarter_when_available(tmp_path: Path) -> None:
@@ -974,7 +974,7 @@ def test_financial_report_tab_switches_to_target_quarter_when_available(tmp_path
 
     assert "目標季" in html
     assert "上一季" not in html
-    assert "財報季度：2026Q2" in html
+    assert "財報季度：Q2" in html
 
 
 def test_update_financial_report_cache_writes_active_cache_and_meta(tmp_path: Path) -> None:

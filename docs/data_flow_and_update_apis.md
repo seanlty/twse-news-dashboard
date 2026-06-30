@@ -77,7 +77,7 @@ Current display flow:
 3. The page keeps only financial-report records and first tries to display the scheduler target quarter.
 4. Before the target quarter appears, the newest available prior quarter remains visible.
 5. After any target-quarter row appears, only that target quarter is displayed.
-6. Rows expose `quarter`, `eps`, `gross_margin_pct`, `operating_margin_pct`, and `non_operating_pct`.
+6. Rows expose `quarter`, `eps`, `gross_margin_pct`, `operating_margin_pct`, and `non_operating_pct`; the cache keeps full quarter keys such as `2026Q1`, while the UI displays `Q1`/`Q2`/`Q3`/`Q4`.
 7. Rows are split into `市場未反映` and `歷史公告` by the same market-close classifier.
 8. Original announcement text stays available through the same expandable-row pattern as the self-reported EPS tab.
 
