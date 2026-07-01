@@ -389,15 +389,24 @@ def parse_event_datetime(record: dict[str, Any]) -> datetime | None:
     return None
 
 
-def format_event_table_time(record: dict[str, Any]) -> str:
+def event_datetime_in_taiwan(record: dict[str, Any]) -> datetime | None:
     event_at = parse_event_datetime(record)
+    if event_at is None:
+        return None
+    if event_at.tzinfo is None:
+        return event_at.replace(tzinfo=TAIWAN_TZ)
+    return event_at.astimezone(TAIWAN_TZ)
+
+
+def format_event_table_time(record: dict[str, Any]) -> str:
+    event_at = event_datetime_in_taiwan(record)
     if event_at is not None:
         return f"{event_at.month:02d}-{event_at.day:02d} {event_at.hour:02d}:{event_at.minute:02d}"
     return display_event_time(record)
 
 
 def format_event_table_time_with_seconds(record: dict[str, Any]) -> str:
-    event_at = parse_event_datetime(record)
+    event_at = event_datetime_in_taiwan(record)
     if event_at is not None:
         return (
             f"{event_at.month:02d}-{event_at.day:02d} "
@@ -407,11 +416,9 @@ def format_event_table_time_with_seconds(record: dict[str, Any]) -> str:
 
 
 def event_sort_value(record: dict[str, Any]) -> str:
-    event_at = parse_event_datetime(record)
+    event_at = event_datetime_in_taiwan(record)
     if event_at is None:
         return ""
-    if event_at.tzinfo is not None:
-        event_at = event_at.astimezone(TAIWAN_TZ)
     return event_at.strftime("%Y%m%d%H%M%S")
 
 
@@ -431,13 +438,9 @@ def taiwan_now_iso() -> str:
 
 
 def event_time_iso(record: dict[str, Any]) -> str:
-    event_at = parse_event_datetime(record)
+    event_at = event_datetime_in_taiwan(record)
     if event_at is None:
         return ""
-    if event_at.tzinfo is None:
-        event_at = event_at.replace(tzinfo=TAIWAN_TZ)
-    else:
-        event_at = event_at.astimezone(TAIWAN_TZ)
     return event_at.isoformat(timespec="seconds")
 
 
@@ -1377,6 +1380,10 @@ def render_monthly_revenue_searchbar(search_query: str, active_tab: str = TAB_MO
 
 
 def display_event_time(record: dict[str, Any]) -> str:
+    event_at = event_datetime_in_taiwan(record)
+    if event_at is not None:
+        return event_at.strftime("%Y-%m-%d %H:%M")
+
     value = str(record.get("announced_at") or record.get("detected_at") or record.get("event_time") or "")
     if not value:
         return "-"

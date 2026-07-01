@@ -481,6 +481,40 @@ def test_monthly_revenue_tab_only_displays_latest_data_month_from_cache(tmp_path
     assert "最新申報：07-03 09:05:06" in html
 
 
+def test_monthly_revenue_tab_formats_utc_detected_at_as_taiwan_time(tmp_path: Path) -> None:
+    monthly_cache = tmp_path / "monthly-cache.json"
+    save_records(
+        [
+            {
+                "source_type": "mops_monthly_revenue_summary",
+                "source_label": "上市月營收彙總",
+                "event_type": "monthly_revenue",
+                "market": "sii",
+                "company_id": "2402",
+                "company_name": "毅嘉",
+                "title": "2402 毅嘉 115/06 月營收",
+                "detected_at": "2026-07-01T10:56:15+00:00",
+                "event_time": "2026-07-01T10:56:15+00:00",
+                "data_month": "115/06",
+                "monthly_revenue": "1134829",
+            },
+        ],
+        monthly_cache,
+    )
+    dashboard = make_dashboard(
+        range_cache_file=tmp_path / "missing-cache.json",
+        crawler=FailingCrawler(),
+        monthly_revenue_output_path=monthly_cache,
+    )
+
+    html = fetch_dashboard_html(dashboard, f"/?tab={TAB_MONTHLY_REVENUE}")
+
+    assert "最新申報：07-01 18:56:15" in html
+    assert "最新偵測：07-01 18:56:15" in html
+    assert ">07-01 18:56<span" in html
+    assert "07-01 10:56" not in html
+
+
 def test_monthly_revenue_market_reaction_uses_latest_completed_trading_day() -> None:
     records = [
         {
