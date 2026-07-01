@@ -13,6 +13,7 @@ from src.mops_crawler import (
     parse_previous_day_list,
     roc_date_to_iso,
     sort_records_by_spoke_time,
+    taiwan_now_iso,
 )
 
 
@@ -412,6 +413,10 @@ def test_sort_records_by_spoke_time_newest_first() -> None:
     sorted_records = sort_records_by_spoke_time(records)
 
     assert [record["company_id"] for record in sorted_records] == ["2", "1", "3"]
+
+
+def test_taiwan_now_iso_uses_taipei_offset() -> None:
+    assert taiwan_now_iso().endswith("+08:00")
 
 
 def test_dedupe_records_uses_mops_row_identity() -> None:

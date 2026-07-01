@@ -6,6 +6,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from src.monthly_revenue_crawler import (
     MonthlyRevenueCrawler,
     append_new_monthly_revenue_records,
+    current_detected_at,
     filter_monthly_revenue_records_by_data_month,
     filter_monthly_records_by_company_id,
     looks_like_monthly_or_financial_signal,
@@ -302,3 +303,24 @@ def test_append_new_monthly_revenue_records_keeps_first_seen_data_time() -> None
 
     assert new_records == [changed]
     assert [record["monthly_revenue"] for record in merged] == ["1027000", "1026888"]
+
+
+def test_current_detected_at_uses_taipei_offset() -> None:
+    assert current_detected_at().endswith("+08:00")
+
+
+def test_sort_event_records_orders_mixed_timezones_by_actual_time() -> None:
+    records = [
+        {
+            "company_id": "old",
+            "event_time": "2026-07-01T18:30:00+08:00",
+        },
+        {
+            "company_id": "new",
+            "event_time": "2026-07-01T10:56:15+0000",
+        },
+    ]
+
+    sorted_records = sort_event_records(records)
+
+    assert [record["company_id"] for record in sorted_records] == ["new", "old"]

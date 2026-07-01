@@ -16,6 +16,7 @@ from collections import Counter
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import requests
 
@@ -35,10 +36,11 @@ DEFAULT_TARGET_QUARTER = "2026Q1"
 DEFAULT_ANNOUNCEMENT_DATES = "2026-05-08,2026-05-12,2026-05-07"
 DEFAULT_CACHE_OUTPUT = PROJECT_ROOT / "data" / "raw" / "financial_report_demo_cache_2026q1.json"
 DEFAULT_REPORT_OUTPUT = PROJECT_ROOT / "data" / "raw" / "financial_report_probe_2026q1_high_volume.json"
+TAIWAN_TZ = ZoneInfo("Asia/Taipei")
 
 
 def now_text() -> str:
-    return datetime.now().astimezone().isoformat(timespec="seconds")
+    return datetime.now(TAIWAN_TZ).isoformat(timespec="seconds")
 
 
 def iso_to_roc_date(value: str | date) -> str:

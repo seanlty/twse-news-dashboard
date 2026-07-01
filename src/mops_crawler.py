@@ -6,10 +6,11 @@ import json
 import re
 import time
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin
+from zoneinfo import ZoneInfo
 
 import requests
 from bs4 import BeautifulSoup
@@ -27,6 +28,7 @@ CATEGORY_ALL = "all"
 CATEGORY_FINANCIAL_SELF_REPORT = "financial-self-report"
 CATEGORY_CHOICES = (CATEGORY_ALL, CATEGORY_FINANCIAL_SELF_REPORT)
 EPS_LABEL = "每股盈餘"
+TAIWAN_TZ = ZoneInfo("Asia/Taipei")
 
 FORM_ASSIGNMENT_PATTERN = re.compile(
     r"document\.[A-Za-z0-9_]+\.([A-Za-z0-9_]+)\.value=(['\"])(.*?)\2"
@@ -124,13 +126,25 @@ def iso_date_to_roc(value: str | date) -> str:
 
 def default_previous_day() -> date:
     """Return the calendar day used by the MOPS previous-day button."""
-    return date.today() - timedelta(days=1)
+    return taiwan_today() - timedelta(days=1)
 
 
 def default_month_start(today: date | None = None) -> date:
     """Return the first calendar day of the month."""
-    current = today or date.today()
+    current = today or taiwan_today()
     return current.replace(day=1)
+
+
+def taiwan_now() -> datetime:
+    return datetime.now(TAIWAN_TZ)
+
+
+def taiwan_today() -> date:
+    return taiwan_now().date()
+
+
+def taiwan_now_iso() -> str:
+    return taiwan_now().isoformat(timespec="seconds")
 
 
 def iter_dates(start_date: str | date, end_date: str | date) -> list[date]:
@@ -814,7 +828,7 @@ class MopsCrawler:
         selected = summaries[:max_items] if max_items > 0 else summaries
 
         records: list[dict[str, Any]] = []
-        fetched_at = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+        fetched_at = taiwan_now_iso()
         for summary in selected:
             record = dict(summary)
             record["fetched_at"] = fetched_at
@@ -834,7 +848,7 @@ class MopsCrawler:
         selected = summaries[:max_items] if max_items > 0 else summaries
 
         records: list[dict[str, Any]] = []
-        fetched_at = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+        fetched_at = taiwan_now_iso()
         for summary in selected:
             record = dict(summary)
             record["fetched_at"] = fetched_at
@@ -860,7 +874,7 @@ class MopsCrawler:
         """
         records: list[dict[str, Any]] = []
         dates = iter_dates(start_date, end_date)
-        fetched_at = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+        fetched_at = taiwan_now_iso()
 
         for index, target_date in enumerate(dates):
             summaries = self.fetch_previous_day_summaries(target_date=target_date, market=market)

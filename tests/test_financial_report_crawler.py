@@ -116,6 +116,23 @@ def test_build_financial_report_record_skips_corrections_without_line_items() ->
     assert record is None
 
 
+def test_build_financial_report_record_default_detected_at_uses_taipei_offset() -> None:
+    record = build_financial_report_record(
+        {
+            "company_id": "2601",
+            "company_name": "益航",
+            "spoke_date": "2026-05-14",
+            "spoke_time": "17:30:33",
+            "subject": "公告本公司董事會通過115年第一季合併財務報告",
+            "detail_preview": {"description": OFFICIAL_Q1_DETAIL},
+        },
+        target_quarter="2026Q1",
+    )
+
+    assert record is not None
+    assert record["detected_at"].endswith("+08:00")
+
+
 def test_dedupe_financial_report_records_uses_company_time_quarter_subject() -> None:
     record = {
         "company_id": "2601",

@@ -194,6 +194,10 @@ def taiwan_now() -> datetime:
     return datetime.now(TAIWAN_TZ)
 
 
+def taiwan_today() -> date:
+    return taiwan_now().date()
+
+
 def is_local_client(client_host: str) -> bool:
     return client_host in {"127.0.0.1", "::1", "localhost"}
 
@@ -368,24 +372,40 @@ def format_table_time(record: dict[str, Any]) -> str:
     return f"{date_part} {time_text[:5]}".strip()
 
 
+def parse_datetime_text(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    normalized = re.sub(r"([+-]\d{2})(\d{2})$", r"\1:\2", text.replace("Z", "+00:00"))
+    try:
+        return datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+
+
+def datetime_in_taiwan(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=TAIWAN_TZ)
+    return value.astimezone(TAIWAN_TZ)
+
+
+def datetime_text_in_taiwan(value: Any) -> datetime | None:
+    parsed = parse_datetime_text(value)
+    if parsed is None:
+        return None
+    return datetime_in_taiwan(parsed)
+
+
 def parse_event_datetime(record: dict[str, Any]) -> datetime | None:
     spoke_date = str(record.get("spoke_date", "")).strip()
     if spoke_date:
         spoke_time = normalize_time(str(record.get("spoke_time", ""))) or "00:00:00"
-        try:
-            return datetime.fromisoformat(f"{spoke_date}T{spoke_time}")
-        except ValueError:
-            pass
+        if (parsed := parse_datetime_text(f"{spoke_date}T{spoke_time}")) is not None:
+            return parsed
 
     for key in ("announced_at", "event_time", "detected_at", "fetched_at"):
-        value = str(record.get(key, "")).strip()
-        if not value:
-            continue
-        normalized = value.replace("Z", "+00:00")
-        try:
-            return datetime.fromisoformat(normalized)
-        except ValueError:
-            continue
+        if (parsed := parse_datetime_text(record.get(key))) is not None:
+            return parsed
     return None
 
 
@@ -393,9 +413,7 @@ def event_datetime_in_taiwan(record: dict[str, Any]) -> datetime | None:
     event_at = parse_event_datetime(record)
     if event_at is None:
         return None
-    if event_at.tzinfo is None:
-        return event_at.replace(tzinfo=TAIWAN_TZ)
-    return event_at.astimezone(TAIWAN_TZ)
+    return datetime_in_taiwan(event_at)
 
 
 def format_event_table_time(record: dict[str, Any]) -> str:
@@ -450,15 +468,9 @@ def newest_event_time_iso(records: list[dict[str, Any]]) -> str:
 
 
 def format_meta_time(value: Any) -> str:
-    text = str(value or "").strip()
-    if not text:
-        return ""
-    try:
-        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-    except ValueError:
-        return text
-    if parsed.tzinfo is not None:
-        parsed = parsed.astimezone(TAIWAN_TZ)
+    parsed = datetime_text_in_taiwan(value)
+    if parsed is None:
+        return str(value or "").strip()
     return parsed.strftime("%m-%d %H:%M:%S")
 
 
@@ -597,12 +609,10 @@ def monthly_revenue_company_count(records: list[dict[str, Any]]) -> int:
 def latest_monthly_revenue_detected_record(records: list[dict[str, Any]]) -> dict[str, Any] | None:
     candidates: list[tuple[float, dict[str, Any]]] = []
     for record in records:
-        event_at = parse_event_datetime(
-            {
-                "detected_at": record.get("detected_at", ""),
-                "event_time": record.get("event_time", ""),
-                "announced_at": record.get("announced_at", ""),
-            }
+        event_at = (
+            datetime_text_in_taiwan(record.get("detected_at"))
+            or datetime_text_in_taiwan(record.get("event_time"))
+            or datetime_text_in_taiwan(record.get("announced_at"))
         )
         if event_at is None:
             continue
@@ -615,18 +625,9 @@ def latest_monthly_revenue_detected_record(records: list[dict[str, Any]]) -> dic
 def newest_monthly_revenue_detected_at_iso(records: list[dict[str, Any]]) -> str:
     candidates: list[tuple[float, datetime]] = []
     for record in records:
-        detected_at = str(record.get("detected_at", "")).strip()
-        if not detected_at:
-            continue
-        try:
-            parsed = datetime.fromisoformat(detected_at.replace("Z", "+00:00"))
-        except ValueError:
-            continue
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=TAIWAN_TZ)
-        else:
-            parsed = parsed.astimezone(TAIWAN_TZ)
-        candidates.append((parsed.timestamp(), parsed))
+        parsed = datetime_text_in_taiwan(record.get("detected_at"))
+        if parsed is not None:
+            candidates.append((parsed.timestamp(), parsed))
     if not candidates:
         return ""
     return max(candidates, key=lambda item: item[0])[1].isoformat(timespec="seconds")
@@ -635,18 +636,9 @@ def newest_monthly_revenue_detected_at_iso(records: list[dict[str, Any]]) -> str
 def newest_detected_at_iso(records: list[dict[str, Any]]) -> str:
     candidates: list[tuple[float, datetime]] = []
     for record in records:
-        detected_at = str(record.get("detected_at", "")).strip()
-        if not detected_at:
-            continue
-        try:
-            parsed = datetime.fromisoformat(detected_at.replace("Z", "+00:00"))
-        except ValueError:
-            continue
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=TAIWAN_TZ)
-        else:
-            parsed = parsed.astimezone(TAIWAN_TZ)
-        candidates.append((parsed.timestamp(), parsed))
+        parsed = datetime_text_in_taiwan(record.get("detected_at"))
+        if parsed is not None:
+            candidates.append((parsed.timestamp(), parsed))
     if not candidates:
         return ""
     return max(candidates, key=lambda item: item[0])[1].isoformat(timespec="seconds")
@@ -697,7 +689,7 @@ def filter_records_by_listing_market(records: list[dict[str, Any]]) -> list[dict
 
 
 def parse_record_date(record: dict[str, Any]) -> date | None:
-    event_at = parse_event_datetime(record)
+    event_at = event_datetime_in_taiwan(record)
     return event_at.date() if event_at is not None else None
 
 
@@ -829,7 +821,7 @@ def determine_cutoff_date(
 
 
 def is_market_unreacted_record(record: dict[str, Any], cutoff_date: date) -> bool:
-    event_at = parse_event_datetime(record)
+    event_at = event_datetime_in_taiwan(record)
     if event_at is None:
         return False
     return (
@@ -3178,7 +3170,7 @@ class DashboardServer:
             "company_ids": self.monthly_revenue_company_ids,
             "data_month": f"{revenue_roc_year}/{revenue_month:02d}",
             "display_data_month": f"{revenue_roc_year + 1911}/{revenue_month:02d}",
-            "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "updated_at": taiwan_now().strftime("%Y-%m-%d %H:%M:%S"),
         }
 
     def _fetch_latest_listed_otc_records(self) -> list[dict[str, Any]]:
@@ -3409,7 +3401,7 @@ def build_handler(dashboard: DashboardServer) -> type[BaseHTTPRequestHandler]:
                 return
 
             if path in {"/", "/index.html"}:
-                generated_at = time.strftime("%Y-%m-%d %H:%M:%S")
+                generated_at = taiwan_now().strftime("%Y-%m-%d %H:%M:%S")
                 self._send_html(
                     render_dashboard(
                         records,
@@ -3489,7 +3481,7 @@ def crawl_previous_command(args: argparse.Namespace) -> None:
 def crawl_range_command(args: argparse.Namespace) -> None:
     crawler = MopsCrawler(request_interval_seconds=args.request_interval)
     start_date = args.start_date or default_month_start().isoformat()
-    end_date = args.end_date or date.today().isoformat()
+    end_date = args.end_date or taiwan_today().isoformat()
     records = crawler.fetch_date_range_records(
         start_date=start_date,
         end_date=end_date,
@@ -3508,7 +3500,7 @@ def crawl_range_command(args: argparse.Namespace) -> None:
 def crawl_monthly_revenue_command(args: argparse.Namespace) -> None:
     crawler = MonthlyRevenueCrawler(request_interval_seconds=args.request_interval)
     start_date = args.start_date or default_month_start().isoformat()
-    end_date = args.end_date or date.today().isoformat()
+    end_date = args.end_date or taiwan_today().isoformat()
     reference_date = date.fromisoformat(end_date)
     default_roc_year, default_month = previous_month_parts(reference_date)
     revenue_roc_year = args.revenue_roc_year or default_roc_year

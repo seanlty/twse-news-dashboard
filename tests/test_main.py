@@ -493,8 +493,8 @@ def test_monthly_revenue_tab_formats_utc_detected_at_as_taiwan_time(tmp_path: Pa
                 "company_id": "2402",
                 "company_name": "毅嘉",
                 "title": "2402 毅嘉 115/06 月營收",
-                "detected_at": "2026-07-01T10:56:15+00:00",
-                "event_time": "2026-07-01T10:56:15+00:00",
+                "detected_at": "2026-07-01T10:56:15+0000",
+                "event_time": "2026-07-01T10:56:15+0000",
                 "data_month": "115/06",
                 "monthly_revenue": "1134829",
             },
@@ -536,6 +536,29 @@ def test_monthly_revenue_market_reaction_uses_latest_completed_trading_day() -> 
     assert cutoff_date == date(2026, 6, 26)
     assert market_unreacted == []
     assert historical == records
+
+
+def test_market_reaction_converts_utc_detected_at_to_taiwan_time() -> None:
+    records = [
+        {
+            "company_id": "2402",
+            "company_name": "毅嘉",
+            "event_type": "monthly_revenue",
+            "detected_at": "2026-07-01T10:56:15+00:00",
+            "event_time": "2026-07-01T10:56:15+00:00",
+            "data_month": "115/06",
+        }
+    ]
+
+    cutoff_date, market_unreacted, historical = split_records_by_market_reaction(
+        records,
+        now=datetime(2026, 7, 1, 20, 0),
+        trading_dates=[date(2026, 7, 1)],
+    )
+
+    assert cutoff_date == date(2026, 7, 1)
+    assert market_unreacted == records
+    assert historical == []
 
 
 def test_last_completed_market_close_date_uses_trading_calendar() -> None:

@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
 from typing import Any
 
-from mops_crawler import normalize_time, roc_date_to_iso
+from mops_crawler import normalize_time, roc_date_to_iso, taiwan_now_iso
 
 NUMBER_PATTERN = re.compile(r"\(?-?\d[\d,]*(?:\.\d+)?\)?")
 ROC_PERIOD_PATTERN = re.compile(
@@ -213,7 +212,7 @@ def build_financial_report_record(
         "non_operating_pct": metrics.get("non_operating_pct"),
         "announced_at": announced_at,
         "event_time": announced_at,
-        "detected_at": detected_at or datetime.now().astimezone().isoformat(timespec="seconds"),
+        "detected_at": detected_at or taiwan_now_iso(),
         "metrics": metrics,
         "detail": detail,
     }

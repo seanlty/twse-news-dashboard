@@ -18,6 +18,7 @@ from bs4.element import Tag
 from mops_crawler import (
     DEFAULT_REQUEST_INTERVAL_SECONDS,
     MOPS_BASE_URL,
+    TAIWAN_TZ,
     MopsCrawler,
     clean_text,
     iso_date_to_roc_parts,
@@ -26,6 +27,8 @@ from mops_crawler import (
     parse_detail,
     parse_detail_assignments,
     roc_date_to_iso,
+    taiwan_now_iso,
+    taiwan_today,
 )
 
 HISTORICAL_MATERIAL_AJAX_PATH = "/mops/web/ajax_t05st01"
@@ -79,13 +82,13 @@ DETAIL_FIELD_LABELS = {
 
 
 def current_detected_at() -> str:
-    """Return local ISO timestamp for the crawler's first-observed time."""
-    return datetime.now().astimezone().isoformat(timespec="seconds")
+    """Return Taiwan ISO timestamp for the crawler's first-observed time."""
+    return taiwan_now_iso()
 
 
 def previous_month_parts(today: date | None = None) -> tuple[int, int]:
     """Return ROC year/month for the previous calendar month."""
-    current = today or date.today()
+    current = today or taiwan_today()
     year = current.year
     month = current.month - 1
     if month == 0:
@@ -465,16 +468,33 @@ def make_event_time(spoke_date: str, spoke_time: str) -> str:
     return f"{spoke_date}T{normalized_time or '00:00:00'}"
 
 
+def parse_event_sort_datetime(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    normalized = re.sub(r"([+-]\d{2})(\d{2})$", r"\1:\2", text.replace("Z", "+00:00"))
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=TAIWAN_TZ)
+    return parsed.astimezone(TAIWAN_TZ)
+
+
+def record_event_sort_timestamp(record: dict[str, Any]) -> float:
+    for key in ("event_time", "announced_at", "detected_at", "fetched_at"):
+        parsed = parse_event_sort_datetime(record.get(key))
+        if parsed is not None:
+            return parsed.timestamp()
+    return 0.0
+
+
 def sort_event_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Sort mixed monthly tab records newest first."""
     return sorted(
         records,
-        key=lambda record: str(
-            record.get("event_time")
-            or record.get("announced_at")
-            or record.get("detected_at")
-            or ""
-        ),
+        key=record_event_sort_timestamp,
         reverse=True,
     )
 

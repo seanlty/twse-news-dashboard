@@ -22,6 +22,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin
+from zoneinfo import ZoneInfo
 
 import requests
 
@@ -62,6 +63,7 @@ REVENUE_SUBJECT_EXCLUDE_KEYWORDS = (
     "更正",
     "會計師調整",
 )
+TAIWAN_TZ = ZoneInfo("Asia/Taipei")
 
 
 class ThrottledSession:
@@ -99,7 +101,7 @@ class ThrottledSession:
 
 
 def now_text() -> str:
-    return datetime.now().astimezone().isoformat(timespec="seconds")
+    return datetime.now(TAIWAN_TZ).isoformat(timespec="seconds")
 
 
 def roc_year_for(value: date) -> int:
@@ -438,7 +440,7 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
     if args.roc_year is None or args.month is None:
-        args.roc_year, args.month = previous_month_parts(date.today())
+        args.roc_year, args.month = previous_month_parts(datetime.now(TAIWAN_TZ).date())
 
     session = ThrottledSession(request_interval_seconds=args.request_interval)
     result: dict[str, Any] = {
