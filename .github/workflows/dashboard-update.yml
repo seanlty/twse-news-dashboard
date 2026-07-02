@@ -52,25 +52,86 @@ jobs:
           test -n "$UPDATE_TOKEN"
 
       - name: Update material info and self-reported cache
+        id: material_info
         if: steps.window.outputs.should_run == 'true'
+        continue-on-error: true
         shell: bash
         run: |
-          curl -fsS -X POST \
+          curl --fail --silent --show-error \
+            --retry 3 \
+            --retry-delay 15 \
+            --retry-max-time 420 \
+            --retry-connrefused \
+            --connect-timeout 20 \
+            --max-time 240 \
+            -X POST \
             "${DASHBOARD_BASE_URL%/}/api/admin/update" \
             -H "Authorization: Bearer $UPDATE_TOKEN"
 
       - name: Update monthly revenue cache
+        id: monthly_revenue
         if: steps.window.outputs.should_run == 'true'
+        continue-on-error: true
         shell: bash
         run: |
-          curl -fsS -X POST \
+          curl --fail --silent --show-error \
+            --retry 3 \
+            --retry-delay 15 \
+            --retry-max-time 420 \
+            --retry-connrefused \
+            --connect-timeout 20 \
+            --max-time 240 \
+            -X POST \
             "${DASHBOARD_BASE_URL%/}/api/admin/update-monthly-revenue" \
             -H "Authorization: Bearer $UPDATE_TOKEN"
 
       - name: Update financial report cache
+        id: financial_report
         if: steps.window.outputs.should_run == 'true'
+        continue-on-error: true
         shell: bash
         run: |
-          curl -fsS -X POST \
+          curl --fail --silent --show-error \
+            --retry 3 \
+            --retry-delay 15 \
+            --retry-max-time 420 \
+            --retry-connrefused \
+            --connect-timeout 20 \
+            --max-time 240 \
+            -X POST \
             "${DASHBOARD_BASE_URL%/}/api/admin/update-financial-report" \
             -H "Authorization: Bearer $UPDATE_TOKEN"
+
+      - name: Summarize update endpoint results
+        if: steps.window.outputs.should_run == 'true'
+        shell: bash
+        env:
+          MATERIAL_INFO_OUTCOME: ${{ steps.material_info.outcome }}
+          MONTHLY_REVENUE_OUTCOME: ${{ steps.monthly_revenue.outcome }}
+          FINANCIAL_REPORT_OUTCOME: ${{ steps.financial_report.outcome }}
+        run: |
+          {
+            echo "### Dashboard scheduled updates"
+            echo ""
+            echo "| Endpoint | Result |"
+            echo "| --- | --- |"
+            echo "| material info and self-reported cache | ${MATERIAL_INFO_OUTCOME:-skipped} |"
+            echo "| monthly revenue cache | ${MONTHLY_REVENUE_OUTCOME:-skipped} |"
+            echo "| financial report cache | ${FINANCIAL_REPORT_OUTCOME:-skipped} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          failed=0
+          for outcome in \
+            "$MATERIAL_INFO_OUTCOME" \
+            "$MONTHLY_REVENUE_OUTCOME" \
+            "$FINANCIAL_REPORT_OUTCOME"
+          do
+            if [ "$outcome" != "success" ]; then
+              failed=1
+            fi
+          done
+
+          if [ "$failed" -ne 0 ]; then
+            echo "One or more update endpoints failed after retries." >&2
+            exit 1
+          fi
