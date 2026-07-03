@@ -1,4 +1,5 @@
 python-dotenv
 beautifulsoup4
 requests
+finlab==2.0.13
 pytest

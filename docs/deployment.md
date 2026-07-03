@@ -37,6 +37,9 @@ TWSE_DASHBOARD_RECENT_DAYS=7
 TWSE_DASHBOARD_UPDATE_MIN_INTERVAL=300
 TWSE_DASHBOARD_UPDATE_TOKEN=<secret-token>
 FINMIND_TOKEN=<secret-token>
+FINLAB_TOKEN=<secret-token>
+TWSE_DASHBOARD_FINLAB_CACHE_TTL_SECONDS=86400
+TWSE_DASHBOARD_FINLAB_CACHE_FILE=/data/raw/finlab_monthly_revenue_eps_inputs.pkl
 ```
 
 The `serve` command reads these environment variables as defaults:
@@ -126,7 +129,9 @@ Monthly revenue scheduler direction:
 8. Write monthly revenue lifecycle metadata to `/data/raw/monthly_revenue_latest_meta.json`.
 9. If a fallback also fails, keep the previous cache for that market and record the market failure in both the monthly revenue update response and metadata.
 10. The page reads the multi-period cache but displays only the newest available revenue month. Before the new month appears, it keeps showing the prior month; after any new-month row appears, it switches to that month only.
-11. Set `FINMIND_TOKEN` or `FINMIND_API_TOKEN` in the production environment so the page can use FinMind `TaiwanStockTradingDate` for the latest completed market-close date. If FinMind is unavailable, the page falls back to weekday-based close detection.
+11. When `FINLAB_TOKEN` is set, the monthly revenue update enriches the newest displayed month with `EPS(估)`, `前季EPS`, and `EPS季增率(估)` using FinLab monthly revenue, previous-quarter EPS, previous-quarter capital, and previous-quarter net margin. FinLab input data is cached for `TWSE_DASHBOARD_FINLAB_CACHE_TTL_SECONDS`, defaulting to one day.
+12. If FinLab refresh fails but an older FinLab cache exists, the updater uses the stale cache and records that state in monthly revenue metadata. If no FinLab cache exists, monthly revenue still updates normally, but EPS estimate fields are omitted.
+13. Set `FINMIND_TOKEN` or `FINMIND_API_TOKEN` in the production environment so the page can use FinMind `TaiwanStockTradingDate` for the latest completed market-close date. If FinMind is unavailable, the page falls back to weekday-based close detection.
 
 Source role notes:
 

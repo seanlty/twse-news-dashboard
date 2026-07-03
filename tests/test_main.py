@@ -123,6 +123,9 @@ class FakeMonthlyRevenueCrawler:
                 "event_time": "2026-05-07T16:00:00+08:00",
                 "data_month": "115/04",
                 "monthly_revenue": "1026888",
+                "estimated_eps": "1.234",
+                "previous_quarter_eps": "0.567",
+                "estimated_eps_qoq_percent": "117.64",
                 "previous_month_revenue": "900000",
                 "mom_percent": "14.10",
                 "yoy_percent": "96.24",
@@ -417,6 +420,10 @@ def test_monthly_revenue_tab_renders_records(tmp_path: Path) -> None:
     assert "4739" in html
     assert "康普" in html
     assert "1,026.9" in html
+    assert "EPS(估)" in html
+    assert "1.234" in html
+    assert "0.567" in html
+    assert "117.64%" in html
     assert "96.24%" in html
     assert "115.46%" in html
     assert "本月營收及累計營收較去年同期增加。" in html

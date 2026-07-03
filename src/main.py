@@ -56,6 +56,14 @@ from monthly_revenue_crawler import (
     previous_month_parts,
     sort_event_records,
 )
+from monthly_revenue_eps import (
+    DEFAULT_FINLAB_CACHE_TTL_SECONDS,
+    FINLAB_CACHE_FILE_ENV,
+    FINLAB_CACHE_TTL_SECONDS_ENV,
+    FINLAB_EPS_ENABLED_ENV,
+    enrich_records_with_cached_finlab_eps,
+    env_finlab_token,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATA_ROOT_ENV = "TWSE_DASHBOARD_DATA_ROOT"
@@ -69,6 +77,7 @@ DEFAULT_RANGE_OUTPUT_PATH = DEFAULT_RAW_DATA_DIR / "material_info_range.json"
 DEFAULT_RANGE_META_PATH = DEFAULT_RAW_DATA_DIR / "material_info_range_meta.json"
 DEFAULT_MONTHLY_REVENUE_OUTPUT_PATH = DEFAULT_RAW_DATA_DIR / "monthly_revenue_latest.json"
 DEFAULT_MONTHLY_REVENUE_META_PATH = DEFAULT_RAW_DATA_DIR / "monthly_revenue_latest_meta.json"
+DEFAULT_FINLAB_EPS_CACHE_PATH = DEFAULT_RAW_DATA_DIR / "finlab_monthly_revenue_eps_inputs.pkl"
 DEFAULT_FINANCIAL_REPORT_OUTPUT_PATH = DEFAULT_RAW_DATA_DIR / "financial_report_latest.json"
 DEFAULT_FINANCIAL_REPORT_META_PATH = DEFAULT_RAW_DATA_DIR / "financial_report_latest_meta.json"
 DEFAULT_RECENT_DAYS = 7
@@ -172,6 +181,10 @@ def default_monthly_revenue_output_path() -> Path:
 
 def default_monthly_revenue_meta_path() -> Path:
     return dashboard_cache_path("monthly_revenue_latest_meta.json")
+
+
+def default_finlab_eps_cache_path() -> Path:
+    return dashboard_cache_path("finlab_monthly_revenue_eps_inputs.pkl")
 
 
 def default_financial_report_output_path() -> Path:
@@ -1018,6 +1031,15 @@ def format_monthly_revenue_cache_source(cache_file: Path, records: list[dict[str
         parts.append(f"最新更新：{latest_update}")
     if newest_detected_at:
         parts.append(f"最新偵測：{newest_detected_at}")
+    eps_estimate = meta.get("eps_estimate")
+    if isinstance(eps_estimate, dict):
+        if eps_estimate.get("enriched_count"):
+            parts.append(f"EPS估算：{eps_estimate.get('enriched_count')} 家")
+        elif eps_estimate.get("enabled") and (
+            eps_estimate.get("error")
+            or (isinstance(eps_estimate.get("finlab"), dict) and eps_estimate["finlab"].get("error"))
+        ):
+            parts.append("EPS估算失敗")
     if meta.get("market_failure_count"):
         parts.append("部分市場沿用既有 cache")
     if meta.get("last_error"):
@@ -1452,6 +1474,10 @@ def monthly_note(record: dict[str, Any]) -> str:
     )
 
 
+def monthly_eps_estimate_value(record: dict[str, Any], key: str) -> str:
+    return record_field_value(record, key)
+
+
 def render_monthly_revenue_table(records: list[dict[str, Any]]) -> str:
     if not records:
         return render_empty_state("目前沒有月營收資料。")
@@ -1472,7 +1498,7 @@ def render_monthly_revenue_table(records: list[dict[str, Any]]) -> str:
         rows.append(
             f"""
             <tr class="eps-group-row">
-              <td colspan="8">{html.escape(section_title)}</td>
+              <td colspan="11">{html.escape(section_title)}</td>
             </tr>
             """
         )
@@ -1480,7 +1506,7 @@ def render_monthly_revenue_table(records: list[dict[str, Any]]) -> str:
             rows.append(
                 """
                 <tr class="eps-empty-row">
-                  <td colspan="8">目前沒有符合條件的公告。</td>
+                  <td colspan="11">目前沒有符合條件的公告。</td>
                 </tr>
                 """
             )
@@ -1493,6 +1519,9 @@ def render_monthly_revenue_table(records: list[dict[str, Any]]) -> str:
             mom_value = monthly_mom_percent(record)
             yoy_value = record_field_value(record, "yoy_percent", "本月增減百分比", "營業收入-去年同月增減(%)")
             ytd_yoy_value = record_field_value(record, "ytd_yoy_percent", "累計增減百分比", "累計營業收入-前期比較增減(%)")
+            estimated_eps = monthly_eps_estimate_value(record, "estimated_eps")
+            previous_quarter_eps = monthly_eps_estimate_value(record, "previous_quarter_eps")
+            estimated_eps_qoq = monthly_eps_estimate_value(record, "estimated_eps_qoq_percent")
             rows.append(
                 f"""
                 <tr class="eps-data-row">
@@ -1500,6 +1529,9 @@ def render_monthly_revenue_table(records: list[dict[str, Any]]) -> str:
                   <td class="name-cell" data-label="名稱"{sort_value_attr(record.get("company_name", ""))}>{html.escape(str(record.get("company_name", "")))}</td>
                   <td class="time-cell" data-label="偵測時間"{sort_value_attr(event_sort_value(record))}>{html.escape(format_event_table_time(record))}<span class="time-note">{html.escape(time_note)}</span></td>
                   <td class="metric-cell primary-metric" data-label="營收(M)"{sort_value_attr(metric_sort_value(revenue_value))}>{render_money_millions(revenue_value)}</td>
+                  <td class="metric-cell" data-label="EPS(估)"{sort_value_attr(metric_sort_value(estimated_eps))}>{render_metric(estimated_eps)}</td>
+                  <td class="metric-cell" data-label="前季EPS"{sort_value_attr(metric_sort_value(previous_quarter_eps))}>{render_metric(previous_quarter_eps)}</td>
+                  <td data-label="EPS季增率(估)"{sort_value_attr(metric_sort_value(estimated_eps_qoq))}>{render_percent_value(estimated_eps_qoq)}</td>
                   <td data-label="MOM%"{sort_value_attr(metric_sort_value(mom_value))}>{render_percent_value(mom_value)}</td>
                   <td data-label="YOY%"{sort_value_attr(metric_sort_value(yoy_value))}>{render_percent_value(yoy_value)}</td>
                   <td data-label="累計YOY%"{sort_value_attr(metric_sort_value(ytd_yoy_value))}>{render_percent_value(ytd_yoy_value)}</td>
@@ -1514,6 +1546,9 @@ def render_monthly_revenue_table(records: list[dict[str, Any]]) -> str:
             ("名稱", "text"),
             ("偵測時間", "time"),
             ("營收(M)", "number"),
+            ("EPS(估)", "number"),
+            ("前季EPS", "number"),
+            ("EPS季增率(估)", "number"),
             ("MOM%", "number"),
             ("YOY%", "number"),
             ("累計YOY%", "number"),
@@ -2709,6 +2744,9 @@ class DashboardServer:
         monthly_revenue_market: str = "all",
         monthly_revenue_roc_year: int | None = None,
         monthly_revenue_month: int | None = None,
+        monthly_revenue_eps_enabled: bool = False,
+        finlab_eps_cache_file: Path = DEFAULT_FINLAB_EPS_CACHE_PATH,
+        finlab_eps_cache_ttl_seconds: int = DEFAULT_FINLAB_CACHE_TTL_SECONDS,
         financial_report_output_path: Path = DEFAULT_FINANCIAL_REPORT_OUTPUT_PATH,
         financial_report_target_quarter: str | None = None,
         financial_report_lookback_days: int = DEFAULT_FINANCIAL_REPORT_LOOKBACK_DAYS,
@@ -2739,6 +2777,9 @@ class DashboardServer:
         self.monthly_revenue_market = monthly_revenue_market
         self.monthly_revenue_roc_year = monthly_revenue_roc_year
         self.monthly_revenue_month = monthly_revenue_month
+        self.monthly_revenue_eps_enabled = monthly_revenue_eps_enabled
+        self.finlab_eps_cache_file = finlab_eps_cache_file
+        self.finlab_eps_cache_ttl_seconds = finlab_eps_cache_ttl_seconds
         self.financial_report_target_quarter = financial_report_target_quarter
         self.financial_report_lookback_days = financial_report_lookback_days
 
@@ -2914,6 +2955,27 @@ class DashboardServer:
             self.monthly_revenue_month or default_month,
         )
 
+    def enrich_monthly_revenue_eps_estimates(
+        self,
+        records: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        if not self.monthly_revenue_eps_enabled:
+            return {"ok": True, "enabled": False, "enriched_count": 0}
+        try:
+            return enrich_records_with_cached_finlab_eps(
+                records,
+                cache_file=self.finlab_eps_cache_file,
+                token=env_finlab_token(),
+                ttl_seconds=self.finlab_eps_cache_ttl_seconds,
+            )
+        except Exception as exc:  # pragma: no cover - defensive live update guard.
+            return {
+                "ok": False,
+                "enabled": True,
+                "enriched_count": 0,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+
     def _current_financial_report_target_quarter(self) -> str:
         return self.financial_report_target_quarter or default_financial_report_target_quarter()
 
@@ -3083,6 +3145,7 @@ class DashboardServer:
                 existing_records,
                 latest_records,
             )
+            eps_estimate_result = self.enrich_monthly_revenue_eps_estimates(merged_records)
             save_records(merged_records, cache_file)
 
             market_failure_count = sum(1 for result in market_results if not result.get("ok"))
@@ -3096,6 +3159,7 @@ class DashboardServer:
                 market_failure_count=market_failure_count,
                 degraded=market_failure_count > 0,
                 fallback_skipped_existing_primary_count=fallback_skipped_existing_primary_count,
+                eps_estimate=eps_estimate_result,
                 last_success_at=taiwan_now_iso(),
                 last_error=None,
             )
@@ -3116,6 +3180,7 @@ class DashboardServer:
                 "market_results": market_results,
                 "market_failure_count": market_failure_count,
                 "fallback_skipped_existing_primary_count": fallback_skipped_existing_primary_count,
+                "eps_estimate": eps_estimate_result,
                 "data_month": f"{revenue_roc_year}/{revenue_month:02d}",
                 "target_display_data_month": target_display_data_month,
                 "display_data_month": meta.get("display_data_month", ""),
@@ -3580,6 +3645,9 @@ def serve_command(args: argparse.Namespace) -> None:
         monthly_revenue_market=args.monthly_revenue_market,
         monthly_revenue_roc_year=args.monthly_revenue_year,
         monthly_revenue_month=args.monthly_revenue_month,
+        monthly_revenue_eps_enabled=not args.disable_finlab_eps,
+        finlab_eps_cache_file=args.finlab_eps_cache_file,
+        finlab_eps_cache_ttl_seconds=args.finlab_eps_cache_ttl_seconds,
         financial_report_output_path=args.financial_report_cache_file,
         financial_report_target_quarter=args.financial_report_target_quarter,
         financial_report_lookback_days=args.financial_report_lookback_days,
@@ -3702,6 +3770,24 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--monthly-revenue-market", default="all", choices=["all", "sii", "otc", "rotc", "pub"])
     serve.add_argument("--monthly-revenue-year", type=int, help="ROC year for the watched monthly revenue data")
     serve.add_argument("--monthly-revenue-month", type=int, help="Month for the watched monthly revenue data")
+    serve.add_argument(
+        "--finlab-eps-cache-file",
+        type=Path,
+        default=env_path(FINLAB_CACHE_FILE_ENV) or default_finlab_eps_cache_path(),
+        help="Persistent cache for FinLab monthly-revenue EPS input datasets",
+    )
+    serve.add_argument(
+        "--finlab-eps-cache-ttl-seconds",
+        type=int,
+        default=env_int(FINLAB_CACHE_TTL_SECONDS_ENV, DEFAULT_FINLAB_CACHE_TTL_SECONDS),
+        help="How long to reuse FinLab EPS input data before refreshing",
+    )
+    serve.add_argument(
+        "--disable-finlab-eps",
+        action="store_true",
+        default=not env_bool(FINLAB_EPS_ENABLED_ENV, True),
+        help="Disable FinLab-backed EPS estimates on the monthly revenue tab",
+    )
     serve.add_argument(
         "--financial-report-cache-file",
         type=Path,
