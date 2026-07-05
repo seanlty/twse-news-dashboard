@@ -356,6 +356,11 @@ def fetch_dashboard_html(dashboard: DashboardServer, path: str) -> str:
         thread.join(timeout=5)
 
 
+def assert_meta_strip_item(html: str, label: str, value: str) -> None:
+    assert f'<span class="meta-label">{label}</span>' in html
+    assert f'<span class="meta-value">{value}</span>' in html
+
+
 def save_renderable_range_cache(cache_file: Path) -> None:
     save_records(
         [
@@ -398,7 +403,15 @@ def test_default_page_renders_material_info_tab(tmp_path: Path) -> None:
     assert 'aria-current="page">自結</a>' in html
     assert "EPS年增差" in html
     assert "3163" in html
-    assert "最新公告：06-26 16:06:00" in html
+    assert "topbar-actions" in html
+    assert "panel-title-line" in html
+    assert "panel-meta-strip" in html
+    assert "top-info-card" not in html
+    assert "panel-info-card" not in html
+    assert "dashboard-footer" in html
+    assert "資料來源：" in html
+    assert "頁面時間：" in html
+    assert_meta_strip_item(html, "最新公告", "06-26 16:06:00")
     assert "data-sortable-table" in html
     assert 'class="sort-button"' in html
     assert "月營收資料抓取功能待補" not in html
@@ -421,8 +434,10 @@ def test_monthly_revenue_tab_renders_records(tmp_path: Path) -> None:
     assert "康普" in html
     assert "1,026.9" in html
     assert "EPS(估)" in html
-    assert "1.234" in html
-    assert "0.567" in html
+    assert "1.23" in html
+    assert "0.57" in html
+    assert 'data-sort-value="1.23400000"' in html
+    assert 'data-sort-value="0.56700000"' in html
     assert "117.64%" in html
     assert "monthly-filter-bar" in html
     assert "monthly-filter-operator" in html
@@ -438,10 +453,19 @@ def test_monthly_revenue_tab_renders_records(tmp_path: Path) -> None:
     assert "96.24%" in html
     assert "115.46%" in html
     assert "本月營收及累計營收較去年同期增加。" in html
-    assert "營收期間：2026/04 | 已申報 1 家" in html
-    assert "最新申報：05-07 16:00:00" in html
+    assert "topbar-actions" in html
+    assert "panel-title-line" in html
+    assert "panel-meta-strip" in html
+    assert "top-info-card" not in html
+    assert "panel-info-card" not in html
+    assert "dashboard-footer" in html
+    assert "資料來源：" in html
+    assert "頁面時間：" in html
     assert "營收月份：2026/04" in html
     assert "最新偵測：05-07 16:00:00" in html
+    assert_meta_strip_item(html, "營收期間", "2026/04")
+    assert_meta_strip_item(html, "已申報", "1 家")
+    assert_meta_strip_item(html, "最新申報", "05-07 16:00:00")
     assert "data-sortable-table" in html
     assert 'data-sort-type="number"' in html
     assert '<span class="time-note">' not in html
@@ -496,8 +520,9 @@ def test_monthly_revenue_tab_only_displays_latest_data_month_from_cache(tmp_path
 
     assert "新資料" in html
     assert "舊資料" not in html
-    assert "營收期間：2026/06 | 已申報 1 家" in html
-    assert "最新申報：07-03 09:05:06" in html
+    assert_meta_strip_item(html, "營收期間", "2026/06")
+    assert_meta_strip_item(html, "已申報", "1 家")
+    assert_meta_strip_item(html, "最新申報", "07-03 09:05:06")
 
 
 def test_monthly_revenue_tab_formats_utc_detected_at_as_taiwan_time(tmp_path: Path) -> None:
@@ -528,7 +553,7 @@ def test_monthly_revenue_tab_formats_utc_detected_at_as_taiwan_time(tmp_path: Pa
 
     html = fetch_dashboard_html(dashboard, f"/?tab={TAB_MONTHLY_REVENUE}")
 
-    assert "最新申報：07-01 18:56:15" in html
+    assert_meta_strip_item(html, "最新申報", "07-01 18:56:15")
     assert "最新偵測：07-01 18:56:15" in html
     assert ">07-01 18:56</td>" in html
     assert "07-01 10:56" not in html
@@ -951,7 +976,11 @@ def test_financial_report_tab_renders_financial_records(tmp_path: Path) -> None:
     assert "17.93%" in html
     assert "13.23%" in html
     assert "-10.42%" in html
-    assert "財報季度：Q1" in html
+    assert "top-info-card" not in html
+    assert "panel-info-card" not in html
+    assert "panel-title-line" in html
+    assert "panel-meta-strip" in html
+    assert_meta_strip_item(html, "財報季度", "Q1")
     assert "data-sortable-table" in html
     assert 'data-sort-type="time"' in html
     assert "1,026.9" not in html
@@ -993,7 +1022,7 @@ def test_financial_report_tab_only_displays_latest_quarter(tmp_path: Path) -> No
 
     assert "新季" in html
     assert "舊季" not in html
-    assert "財報季度：Q1" in html
+    assert_meta_strip_item(html, "財報季度", "Q1")
 
 
 def test_financial_report_tab_falls_back_to_previous_quarter_until_target_arrives(tmp_path: Path) -> None:
@@ -1042,7 +1071,7 @@ def test_financial_report_tab_falls_back_to_previous_quarter_until_target_arrive
     assert "上一季一" in html
     assert "上一季二" in html
     assert "更舊季" not in html
-    assert "財報季度：Q1" in html
+    assert_meta_strip_item(html, "財報季度", "Q1")
 
 
 def test_financial_report_tab_switches_to_target_quarter_when_available(tmp_path: Path) -> None:
@@ -1081,7 +1110,7 @@ def test_financial_report_tab_switches_to_target_quarter_when_available(tmp_path
 
     assert "目標季" in html
     assert "上一季" not in html
-    assert "財報季度：Q2" in html
+    assert_meta_strip_item(html, "財報季度", "Q2")
 
 
 def test_update_financial_report_cache_writes_active_cache_and_meta(tmp_path: Path) -> None:

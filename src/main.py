@@ -239,9 +239,53 @@ def render_empty_state(message: str = "目前沒有抓到重大訊息。") -> st
     return f"<p class=\"empty\">{html.escape(message)}</p>"
 
 
+def render_meta_strip(
+    items: list[tuple[str, str]],
+    *,
+    class_name: str = "",
+    aria_label: str = "資料摘要",
+) -> str:
+    strip_class = "meta-strip"
+    if class_name:
+        strip_class = f"{strip_class} {class_name}"
+    parts = []
+    for label, value in items:
+        parts.append(
+            f"""
+            <span class="meta-strip-item">
+              <span class="meta-label">{html.escape(label)}</span>
+              <span class="meta-value">{html.escape(value or "-")}</span>
+            </span>
+            """
+        )
+    return f"""
+    <div class="{html.escape(strip_class, quote=True)}" aria-label="{html.escape(aria_label, quote=True)}">
+      {"".join(parts)}
+    </div>
+    """
+
+
+def render_dashboard_footer(source: str, generated_at: str) -> str:
+    source_text = str(source or "-")
+    generated_text = str(generated_at or "-")
+    return f"""
+    <footer class="dashboard-footer" aria-label="資料來源與頁面時間">
+      <span class="footer-source" title="{html.escape(source_text, quote=True)}">資料來源：{html.escape(source_text)}</span>
+      <span class="footer-time">頁面時間：{html.escape(generated_text)}</span>
+    </footer>
+    """
+
+
 def render_metric(value: Any) -> str:
     text = "" if value is None else str(value)
     return html.escape(text if text else "-")
+
+
+def render_fixed_metric(value: Any, digits: int = 2) -> str:
+    number = metric_float(value)
+    if number is None:
+        return render_metric(value)
+    return html.escape(f"{number:.{digits}f}")
 
 
 def metric_float(value: Any) -> float | None:
@@ -671,12 +715,15 @@ def render_monthly_revenue_panel_subtitle(records: list[dict[str, Any]]) -> str:
         if latest_record is not None
         else "-"
     )
-    return f"""
-    <div class="panel-subtitle monthly-summary-meta">
-      <div>營收期間：{html.escape(period)} | 已申報 {monthly_revenue_company_count(records)} 家</div>
-      <div>最新申報：{html.escape(latest_text)} · 偵測中 ✓</div>
-    </div>
-    """
+    return render_meta_strip(
+        [
+            ("營收期間", period),
+            ("已申報", f"{monthly_revenue_company_count(records)} 家"),
+            ("最新申報", latest_text),
+        ],
+        class_name="panel-meta-strip monthly-summary-meta",
+        aria_label="月營收摘要",
+    )
 
 
 def render_material_info_panel_subtitle(records: list[dict[str, Any]], recent_days: int) -> str:
@@ -686,12 +733,36 @@ def render_material_info_panel_subtitle(records: list[dict[str, Any]], recent_da
         if latest_record is not None
         else "-"
     )
-    return f"""
-    <div class="panel-subtitle">
-      <div>近 {recent_days} 日自結/注意交易財務資訊（{len(records)} 筆）</div>
-      <div>最新公告：{html.escape(latest_text)}</div>
-    </div>
-    """
+    return render_meta_strip(
+        [
+            ("範圍", f"近 {recent_days} 日"),
+            ("已收錄", f"{len(records)} 筆"),
+            ("最新公告", latest_text),
+        ],
+        class_name="panel-meta-strip",
+        aria_label="自結摘要",
+    )
+
+
+def render_financial_report_panel_subtitle(records: list[dict[str, Any]]) -> str:
+    display_quarter = "-"
+    if records:
+        display_quarter = format_financial_report_quarter(records[0].get("quarter", ""))
+    latest_record = latest_event_record(records)
+    latest_text = (
+        format_event_table_time_with_seconds(latest_record)
+        if latest_record is not None
+        else "-"
+    )
+    return render_meta_strip(
+        [
+            ("財報季度", display_quarter),
+            ("已收錄", f"{len(records)} 筆"),
+            ("最新公告", latest_text),
+        ],
+        class_name="panel-meta-strip",
+        aria_label="財報摘要",
+    )
 
 
 def format_month_day(value: date) -> str:
@@ -1541,8 +1612,8 @@ def render_monthly_revenue_table(records: list[dict[str, Any]]) -> str:
                   <td class="name-cell" data-label="名稱"{sort_value_attr(record.get("company_name", ""))}>{html.escape(str(record.get("company_name", "")))}</td>
                   <td class="time-cell" data-label="偵測時間"{sort_value_attr(event_sort_value(record))}>{html.escape(format_event_table_time(record))}</td>
                   <td class="metric-cell primary-metric" data-label="營收(M)"{sort_value_attr(metric_sort_value(revenue_value))}>{render_money_millions(revenue_value)}</td>
-                  <td class="metric-cell" data-label="EPS(估)"{sort_value_attr(metric_sort_value(estimated_eps))}>{render_metric(estimated_eps)}</td>
-                  <td class="metric-cell" data-label="前季EPS"{sort_value_attr(metric_sort_value(previous_quarter_eps))}>{render_metric(previous_quarter_eps)}</td>
+                  <td class="metric-cell" data-label="EPS(估)"{sort_value_attr(metric_sort_value(estimated_eps))}>{render_fixed_metric(estimated_eps)}</td>
+                  <td class="metric-cell" data-label="前季EPS"{sort_value_attr(metric_sort_value(previous_quarter_eps))}>{render_fixed_metric(previous_quarter_eps)}</td>
                   <td data-label="EPS季增率(估)"{sort_value_attr(metric_sort_value(estimated_eps_qoq))}>{render_percent_value(estimated_eps_qoq)}</td>
                   <td data-label="MOM%"{sort_value_attr(metric_sort_value(mom_value))}>{render_percent_value(mom_value)}</td>
                   <td data-label="YOY%"{sort_value_attr(metric_sort_value(yoy_value))}>{render_percent_value(yoy_value)}</td>
@@ -1737,7 +1808,7 @@ def render_tabbed_dashboard(
         content = render_monthly_revenue_table(records)
     elif active_tab == TAB_FINANCIAL_REPORT:
         title = "財報"
-        subtitle_html = f"<p>{html.escape(f'董事會通過財務報告與早期財報訊號（{len(records)} 筆）')}</p>"
+        subtitle_html = render_financial_report_panel_subtitle(records)
         content = render_financial_report_table(records)
     else:
         title = "自結"
@@ -1748,8 +1819,10 @@ def render_tabbed_dashboard(
     <section class="dashboard-panel">
       <div class="dashboard-panel-header">
         <div class="panel-heading">
-          <h2>{html.escape(title)}</h2>
-          {subtitle_html}
+          <div class="panel-title-line">
+            <h2>{html.escape(title)}</h2>
+            {subtitle_html}
+          </div>
         </div>
         {render_dashboard_tabs(active_tab)}
       </div>
@@ -1887,19 +1960,23 @@ def render_dashboard(
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>台股重大訊息 Dashboard</title>
+  <title>台股即時訊息工作站</title>
   <style>
     :root {{
       color-scheme: dark;
-      --bg: #111421;
-      --panel: #111421;
-      --panel-2: #171b29;
-      --panel-3: #0d101a;
-      --ink: #e5e7eb;
-      --muted: #7f8a99;
-      --line: #252b39;
-      --line-strong: #394456;
-      --accent: #62b4ff;
+      --bg: #000000;
+      --panel: #111214;
+      --panel-2: #0a0a0a;
+      --panel-3: #050505;
+      --ink: #e0e0e0;
+      --muted: #888888;
+      --line: #333333;
+      --line-strong: #2a2a2a;
+      --accent: #f5a623;
+      --accent-strong: #ff8c00;
+      --up: #ff3b30;
+      --down: #00ff00;
+      --neutral: #ffd700;
     }}
     * {{ box-sizing: border-box; }}
     html {{
@@ -1909,7 +1986,10 @@ def render_dashboard(
     body {{
       margin: 0;
       min-height: 100vh;
-      font-family: "Microsoft JhengHei", "Noto Sans TC", Arial, sans-serif;
+      padding-bottom: 30px;
+      font-family: Consolas, "IBM Plex Mono", "Roboto Mono", "Courier New", monospace;
+      font-size: 14px;
+      line-height: 1.35;
       background: var(--bg);
       color: var(--ink);
     }}
@@ -1918,18 +1998,29 @@ def render_dashboard(
       margin: 24px auto 48px;
     }}
     .topbar {{
-      padding: 0 0 16px;
+      padding: 0 0 10px;
       border-bottom: 1px solid var(--line);
     }}
-    h1 {{
-      margin: 0 0 6px;
-      font-size: 28px;
-      letter-spacing: 0;
+    .topbar-content {{
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
     }}
-    .meta {{
+    .topbar-main {{
+      flex: 1 1 auto;
+      min-width: 0;
+    }}
+    .topbar-actions {{
+      display: flex;
+      flex: 0 0 auto;
+      justify-content: flex-end;
+      min-width: 0;
+    }}
+    h1 {{
       margin: 0;
-      color: var(--muted);
-      font-size: 14px;
+      font-size: 22px;
+      letter-spacing: 0;
     }}
     .badge {{
       display: inline-block;
@@ -1939,24 +2030,28 @@ def render_dashboard(
       background: #dcfce7;
       border: 1px solid #86efac;
       border-radius: 4px;
-      font-size: 12px;
+      font-size: 14px;
       font-weight: 700;
     }}
     .searchbar {{
       display: flex;
       align-items: center;
-      gap: 8px;
-      margin-top: 16px;
-      padding-bottom: 16px;
-      border-bottom: 1px solid var(--line);
+      gap: 6px;
+      min-width: 0;
+      margin: 0;
+      padding: 5px 6px;
+      background: #151927;
+      border: 1px solid #2b3445;
+      border-radius: 6px;
     }}
     .searchbar input[type="search"] {{
-      width: min(320px, 100%);
-      height: 38px;
+      width: 160px;
+      height: 30px;
       border: 1px solid var(--line);
-      border-radius: 6px;
-      padding: 8px 10px;
+      border-radius: 5px;
+      padding: 5px 8px;
       font: inherit;
+      font-size: 14px;
       color: var(--ink);
       background: var(--panel-3);
       outline: none;
@@ -1970,10 +2065,11 @@ def render_dashboard(
     }}
     .searchbar button,
     .searchbar a {{
-      height: 38px;
-      border-radius: 6px;
-      padding: 8px 12px;
+      height: 30px;
+      border-radius: 5px;
+      padding: 5px 9px;
       font: inherit;
+      font-size: 14px;
       text-decoration: none;
     }}
     .searchbar button {{
@@ -2003,24 +2099,60 @@ def render_dashboard(
     .panel-heading h2 {{
       margin: 0;
       color: #f3f6fb;
-      font-size: 18px;
+      font-size: 20px;
       line-height: 1.3;
       letter-spacing: 0;
+    }}
+    .panel-heading {{
+      flex: 1 1 auto;
+      min-width: 0;
+    }}
+    .panel-title-line {{
+      display: flex;
+      align-items: baseline;
+      flex-wrap: wrap;
+      gap: 4px 12px;
+      min-width: 0;
     }}
     .panel-heading p {{
       margin: 5px 0 0;
       color: var(--muted);
-      font-size: 13px;
+      font-size: 15px;
     }}
-    .panel-subtitle {{
-      margin-top: 5px;
+    .meta-strip {{
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 4px 9px;
+      min-width: 0;
       color: var(--muted);
-      font-size: 13px;
-      line-height: 1.7;
+      font-size: 14px;
+      line-height: 1.45;
     }}
-    .monthly-summary-meta {{
-      display: grid;
-      gap: 1px;
+    .panel-meta-strip {{
+      margin-top: 0;
+    }}
+    .meta-strip-item {{
+      display: inline-flex;
+      align-items: baseline;
+      gap: 4px;
+      min-width: 0;
+      padding-right: 9px;
+      border-right: 1px solid #2b3445;
+      white-space: nowrap;
+    }}
+    .meta-strip-item:last-child {{
+      padding-right: 0;
+      border-right: 0;
+    }}
+    .meta-label {{
+      color: #7f8a99;
+      font-weight: 800;
+    }}
+    .meta-value {{
+      color: #cfd8e5;
+      font-weight: 900;
+      overflow-wrap: anywhere;
     }}
     .monthly-filter-bar {{
       display: flex;
@@ -2045,7 +2177,7 @@ def render_dashboard(
     }}
     .monthly-filter-field span {{
       color: #a6b2c3;
-      font-size: 12px;
+      font-size: 14px;
       font-weight: 900;
       white-space: nowrap;
     }}
@@ -2057,7 +2189,7 @@ def render_dashboard(
       color: #7bb7ff;
       background: #151a2a;
       font: inherit;
-      font-size: 14px;
+      font-size: 16px;
       font-weight: 900;
       line-height: 1;
       cursor: pointer;
@@ -2077,7 +2209,7 @@ def render_dashboard(
       color: #eef3fb;
       background: #151a2a;
       font: inherit;
-      font-size: 13px;
+      font-size: 15px;
       font-weight: 800;
       outline: none;
     }}
@@ -2093,7 +2225,7 @@ def render_dashboard(
       color: #a6b2c3;
       background: #171b29;
       font: inherit;
-      font-size: 12px;
+      font-size: 14px;
       font-weight: 900;
       cursor: pointer;
     }}
@@ -2120,7 +2252,7 @@ def render_dashboard(
       border-radius: 4px;
       color: #a6b2c3;
       text-decoration: none;
-      font-size: 13px;
+      font-size: 15px;
       font-weight: 800;
       white-space: nowrap;
     }}
@@ -2140,6 +2272,37 @@ def render_dashboard(
       gap: 14px;
       margin-top: 18px;
     }}
+    .dashboard-footer {{
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      z-index: 30;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      min-height: 26px;
+      padding: 5px max(16px, calc((100vw - 1520px) / 2 + 16px));
+      color: #7f8a99;
+      background: rgba(13, 16, 26, 0.94);
+      border-top: 1px solid #252b39;
+      font-size: 13px;
+      line-height: 1.25;
+      backdrop-filter: blur(6px);
+    }}
+    .footer-source {{
+      flex: 1 1 auto;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }}
+    .footer-time {{
+      flex: 0 0 auto;
+      color: #a6b2c3;
+      font-weight: 800;
+      white-space: nowrap;
+    }}
     .news-card {{
       background: var(--panel);
       border: 1px solid var(--line);
@@ -2153,7 +2316,7 @@ def render_dashboard(
       justify-content: space-between;
       gap: 12px;
       color: var(--muted);
-      font-size: 13px;
+      font-size: 15px;
     }}
     .company {{
       display: flex;
@@ -2166,7 +2329,7 @@ def render_dashboard(
       background: #475467;
       border-radius: 4px;
       padding: 2px 6px;
-      font-size: 12px;
+      font-size: 14px;
     }}
     .company strong {{
       overflow-wrap: anywhere;
@@ -2177,7 +2340,7 @@ def render_dashboard(
     }}
     h2 {{
       margin: 14px 0;
-      font-size: 17px;
+      font-size: 19px;
       line-height: 1.5;
       letter-spacing: 0;
     }}
@@ -2189,12 +2352,12 @@ def render_dashboard(
     }}
     dt {{
       color: var(--muted);
-      font-size: 12px;
+      font-size: 14px;
     }}
     dd {{
       margin: 3px 0 0;
       overflow-wrap: anywhere;
-      font-size: 14px;
+      font-size: 16px;
     }}
     details {{
       border-top: 1px solid var(--line);
@@ -2210,7 +2373,7 @@ def render_dashboard(
       overflow-wrap: anywhere;
       margin: 12px 0 0;
       font-family: "Microsoft JhengHei", "Noto Sans TC", monospace;
-      font-size: 14px;
+      font-size: 16px;
       line-height: 1.6;
     }}
     .eps-table-wrap {{
@@ -2227,7 +2390,7 @@ def render_dashboard(
       border-collapse: collapse;
       color: #d8dde7;
       background: #111421;
-      font-size: 14px;
+      font-size: 16px;
     }}
     .eps-table th,
     .eps-table td {{
@@ -2240,7 +2403,7 @@ def render_dashboard(
     .eps-table th {{
       color: #7f8a99;
       background: #171b29;
-      font-size: 13px;
+      font-size: 15px;
       font-weight: 800;
     }}
     .sort-button {{
@@ -2274,7 +2437,7 @@ def render_dashboard(
       justify-content: center;
       width: 10px;
       color: #64748b;
-      font-size: 10px;
+      font-size: 12px;
       line-height: 1;
     }}
     .sort-indicator::before {{
@@ -2362,7 +2525,7 @@ def render_dashboard(
       border-radius: 6px;
       padding: 5px 9px;
       font: inherit;
-      font-size: 13px;
+      font-size: 15px;
       font-weight: 800;
       cursor: pointer;
     }}
@@ -2381,7 +2544,7 @@ def render_dashboard(
       background: #17324d;
       border: 1px solid #31577c;
       border-radius: 4px;
-      font-size: 12px;
+      font-size: 14px;
       font-weight: 900;
       white-space: nowrap;
     }}
@@ -2389,7 +2552,7 @@ def render_dashboard(
       display: block;
       margin-top: 3px;
       color: #8ca0b7;
-      font-size: 11px;
+      font-size: 13px;
       font-weight: 800;
     }}
     .note-cell {{
@@ -2453,7 +2616,7 @@ def render_dashboard(
     .detail-meta-line {{
       margin-top: 8px;
       color: #8ca0b7;
-      font-size: 12px;
+      font-size: 14px;
       font-weight: 800;
     }}
     .time-cell,
@@ -2505,19 +2668,279 @@ def render_dashboard(
       border: 1px solid var(--line);
       border-radius: 8px;
     }}
+    h1,
+    .panel-heading h2,
+    .code-cell,
+    .metric-cell,
+    .money-value,
+    .code {{
+      color: var(--accent);
+    }}
+    main {{
+      width: min(1540px, calc(100% - 12px));
+      margin: 8px auto 34px;
+    }}
+    .topbar {{
+      padding-bottom: 6px;
+      border-bottom-color: var(--line);
+    }}
+    .dashboard-panel-header {{
+      gap: 8px;
+      margin-top: 4px;
+    }}
+    .searchbar,
+    .monthly-filter-bar,
+    .monthly-filter-field,
+    .tab-switcher,
+    .news-card,
+    .eps-table-wrap,
+    .detail-panel,
+    .empty {{
+      background: var(--panel);
+      border: 1px solid var(--line-strong);
+      border-radius: 2px;
+      box-shadow: none;
+    }}
+    .searchbar input[type="search"],
+    .monthly-filter-input {{
+      color: var(--ink);
+      background: #000000;
+      border: 1px solid var(--line);
+      border-radius: 2px;
+      font-variant-numeric: tabular-nums;
+    }}
+    .searchbar input[type="search"]:focus,
+    .monthly-filter-input:focus,
+    .monthly-filter-operator:focus-visible,
+    .sort-button:focus-visible,
+    .eps-data-row:focus {{
+      border-color: var(--accent);
+      box-shadow: none;
+      outline: 1px solid var(--accent);
+      outline-offset: 0;
+    }}
+    .searchbar button,
+    .tab-link.is-active,
+    .monthly-filter-clear:hover,
+    .detail-toggle:hover,
+    .eps-data-row.is-expanded .detail-toggle {{
+      color: #000000;
+      background: var(--accent);
+      border-color: var(--accent);
+    }}
+    .searchbar a,
+    .monthly-filter-operator,
+    .monthly-filter-clear,
+    .detail-toggle,
+    .tab-link {{
+      color: var(--accent);
+      background: #000000;
+      border: 1px solid var(--line);
+      border-radius: 2px;
+    }}
+    .tab-link:hover {{
+      color: #000000;
+      background: var(--neutral);
+      border-color: var(--neutral);
+    }}
+    .meta-label,
+    .eps-table th,
+    .monthly-filter-field span,
+    dt {{
+      color: var(--ink);
+    }}
+    .meta-value,
+    .footer-time,
+    .company strong,
+    dd,
+    .name-cell {{
+      color: #f0f0f0;
+    }}
+    .meta-strip,
+    .footer-source,
+    .time-cell,
+    .detail-meta-line,
+    time,
+    .muted-value {{
+      color: var(--muted);
+    }}
+    .meta-strip-item,
+    .primary-metric {{
+      border-color: var(--line);
+    }}
+    .monthly-filter-bar {{
+      gap: 5px;
+      margin: 6px 0 0;
+      padding: 5px;
+    }}
+    .monthly-filter-field {{
+      min-height: 28px;
+      padding: 2px 5px;
+      gap: 4px;
+    }}
+    .monthly-filter-operator,
+    .monthly-filter-input {{
+      height: 24px;
+      font-size: 14px;
+    }}
+    .monthly-filter-clear {{
+      height: 28px;
+      padding: 4px 8px;
+    }}
+    .news-list {{
+      gap: 6px;
+      margin-top: 6px;
+    }}
+    .news-card {{
+      padding: 8px;
+    }}
+    .news-card header,
+    h2,
+    dl,
+    pre {{
+      font-family: inherit;
+    }}
+    .news-card h2 {{
+      margin: 8px 0;
+      font-size: 15px;
+      line-height: 1.35;
+      color: var(--ink);
+    }}
+    dl {{
+      gap: 4px;
+      margin-bottom: 8px;
+    }}
+    dt {{
+      font-size: 13px;
+    }}
+    dd,
+    pre {{
+      font-size: 14px;
+      line-height: 1.4;
+    }}
+    .eps-table-wrap {{
+      margin-top: 6px;
+    }}
+    .eps-table {{
+      color: var(--ink);
+      background: #000000;
+      font-size: 14px;
+      font-variant-numeric: tabular-nums;
+    }}
+    .eps-table th,
+    .eps-table td {{
+      padding: 6px 8px;
+      border-bottom: 1px solid var(--line);
+    }}
+    .eps-table th {{
+      background: var(--panel);
+      font-size: 13px;
+      color: var(--ink);
+    }}
+    .eps-data-row td {{
+      background: #0a0a0a;
+    }}
+    .eps-data-row:nth-of-type(even) td {{
+      background: #050505;
+    }}
+    .eps-data-row:hover td,
+    .eps-data-row.is-expanded td {{
+      background: #111214;
+    }}
+    .eps-group-row td {{
+      color: #000000;
+      background: var(--accent);
+      border-bottom: 1px solid var(--accent);
+    }}
+    .eps-empty-row td {{
+      color: var(--muted);
+      background: #000000;
+      border-bottom: 1px solid var(--line);
+    }}
+    .source-pill {{
+      color: var(--accent);
+      background: #000000;
+      border: 1px solid var(--accent);
+      border-radius: 2px;
+    }}
+    .code {{
+      color: var(--accent);
+      background: #000000;
+      border: 1px solid var(--accent);
+      border-radius: 2px;
+    }}
+    .sort-button:hover,
+    .sort-button:focus-visible {{
+      color: var(--accent);
+    }}
+    .detail-panel {{
+      scrollbar-color: var(--line) #000000;
+    }}
+    .detail-panel::-webkit-scrollbar-track {{
+      background: #000000;
+      border-radius: 2px;
+    }}
+    .detail-panel::-webkit-scrollbar-thumb {{
+      background: var(--line);
+      border: 1px solid #000000;
+      border-radius: 2px;
+    }}
+    .detail-panel::-webkit-scrollbar-thumb:hover {{
+      background: var(--accent);
+    }}
+    .detail-panel,
+    .eps-detail-panel-row td {{
+      color: var(--ink);
+      background: #050505;
+      border-color: var(--line);
+      border-radius: 2px;
+    }}
+    .detail-subject {{
+      color: var(--accent);
+    }}
+    .note-cell,
+    .subject-cell,
+    pre {{
+      color: var(--ink);
+    }}
+    .positive,
+    .finance-up {{
+      color: var(--up);
+    }}
+    .negative,
+    .finance-down {{
+      color: var(--down);
+    }}
+    .sort-indicator,
+    .eps-table th[aria-sort="ascending"] .sort-indicator::before,
+    .eps-table th[aria-sort="descending"] .sort-indicator::before {{
+      color: var(--neutral);
+    }}
+    .dashboard-footer {{
+      color: var(--muted);
+      background: #000000;
+      border-top: 1px solid var(--line);
+      backdrop-filter: none;
+    }}
+    .badge {{
+      color: #000000;
+      background: var(--neutral);
+      border-color: var(--neutral);
+      border-radius: 2px;
+    }}
     @media (max-width: 900px) {{
       .eps-table-wrap {{
         overflow-x: auto;
-        background: #111421;
-        border: 1px solid #263041;
-        border-radius: 8px;
+        background: #000000;
+        border: 1px solid var(--line-strong);
+        border-radius: 2px;
         box-shadow: none;
       }}
       .eps-table {{
         display: table;
         min-width: 1120px;
-        font-size: 12px;
-        background: #111421;
+        font-size: 14px;
+        background: #000000;
       }}
       .eps-table thead {{
         display: table-header-group;
@@ -2537,8 +2960,8 @@ def render_dashboard(
       .eps-table th,
       .eps-table td {{
         display: table-cell;
-        padding: 8px 9px;
-        border-bottom: 1px solid #252b39;
+        padding: 6px 8px;
+        border-bottom: 1px solid var(--line);
         text-align: right;
         vertical-align: top;
         white-space: nowrap;
@@ -2551,7 +2974,7 @@ def render_dashboard(
         content: none;
       }}
       .primary-metric {{
-        border-left: 1px solid #394456;
+        border-left: 1px solid var(--line);
       }}
       .subject-cell,
       .note-cell,
@@ -2563,9 +2986,9 @@ def render_dashboard(
       }}
       .eps-detail-panel-row td {{
         display: table-cell;
-        padding: 12px 14px 16px;
-        background: #0f1320;
-        border: 1px solid #394456;
+        padding: 8px 10px 10px;
+        background: #050505;
+        border: 1px solid var(--line);
       }}
       .detail-panel {{
         max-height: 52vh;
@@ -2586,7 +3009,7 @@ def render_dashboard(
         width: 100%;
         min-width: 0;
         table-layout: fixed;
-        font-size: 9.5px;
+        font-size: 11.5px;
       }}
       .monthly-table th,
       .monthly-table td {{
@@ -2645,7 +3068,7 @@ def render_dashboard(
         display: none;
       }}
       .monthly-table .time-cell {{
-        color: #8ca0b7;
+        color: var(--muted);
       }}
       .monthly-filter-field {{
         width: 100%;
@@ -2666,16 +3089,30 @@ def render_dashboard(
       .topbar {{
         display: block;
       }}
-      .searchbar {{
-        align-items: stretch;
+      .topbar-content {{
         flex-direction: column;
       }}
-      .searchbar input[type="search"] {{
+      .topbar-actions {{
         width: 100%;
+        justify-content: stretch;
+      }}
+      .searchbar {{
+        width: 100%;
+        flex-wrap: wrap;
+      }}
+      .searchbar input[type="search"] {{
+        flex: 1 1 170px;
+        width: auto;
       }}
       .dashboard-panel-header {{
         align-items: stretch;
         flex-direction: column;
+      }}
+      .panel-title-line {{
+        gap: 2px 8px;
+      }}
+      .meta-strip-item {{
+        white-space: normal;
       }}
       .tab-switcher {{
         width: 100%;
@@ -2699,13 +3136,17 @@ def render_dashboard(
 <body>
   <main>
     <section class="topbar">
-      <div>
-        <h1>台股重大訊息 Dashboard</h1>
-        <p class="meta">資料來源：{html.escape(source)} ｜ 頁面時間：{html.escape(generated_at)}</p>
+      <div class="topbar-content">
+        <div class="topbar-main">
+        <h1>台股即時訊息工作站</h1>
+        </div>
+        <div class="topbar-actions">
+          {searchbar}
+        </div>
       </div>
     </section>
-    {searchbar}
     <section class="news-list">{body}</section>
+    {render_dashboard_footer(source, generated_at)}
   </main>
   <script>
     (() => {{
