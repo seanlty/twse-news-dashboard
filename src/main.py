@@ -1531,6 +1531,7 @@ def render_monthly_revenue_table(records: list[dict[str, Any]]) -> str:
                     numeric_data_attr("eps-qoq", estimated_eps_qoq),
                     numeric_data_attr("mom", mom_value),
                     numeric_data_attr("yoy", yoy_value),
+                    numeric_data_attr("ytd-yoy", ytd_yoy_value),
                 ]
             )
             rows.append(
@@ -1587,6 +1588,11 @@ def render_monthly_revenue_table(records: list[dict[str, Any]]) -> str:
         <span>YOY%</span>
         <button class="monthly-filter-operator" type="button" data-monthly-filter-operator data-operator="gt" aria-label="切換YOY比較符號">&gt;</button>
         <input class="monthly-filter-input" type="number" inputmode="decimal" step="0.1" data-monthly-filter="yoy" aria-label="YOY大於多少百分比">
+      </label>
+      <label class="monthly-filter-field">
+        <span>累計YoY</span>
+        <button class="monthly-filter-operator" type="button" data-monthly-filter-operator data-operator="gt" aria-label="切換累計YoY比較符號">&gt;</button>
+        <input class="monthly-filter-input" type="number" inputmode="decimal" step="0.1" data-monthly-filter="ytdYoy" aria-label="累計YoY大於多少百分比">
       </label>
       <button class="monthly-filter-clear" type="button" data-monthly-filter-clear>清除</button>
     </div>
@@ -2575,6 +2581,71 @@ def render_dashboard(
       }}
       .eps-table td {{
         padding: 7px 8px;
+      }}
+      .monthly-table {{
+        width: 100%;
+        min-width: 0;
+        table-layout: fixed;
+        font-size: 9.5px;
+      }}
+      .monthly-table th,
+      .monthly-table td {{
+        padding: 5px 2px;
+        white-space: normal;
+        overflow-wrap: anywhere;
+        line-height: 1.22;
+      }}
+      .monthly-table .sort-button {{
+        justify-content: center;
+        gap: 1px;
+        white-space: normal;
+        line-height: 1.15;
+      }}
+      .monthly-table th:nth-child(1),
+      .monthly-table td:nth-child(1) {{
+        width: 8%;
+      }}
+      .monthly-table th:nth-child(2),
+      .monthly-table td:nth-child(2) {{
+        width: 10%;
+      }}
+      .monthly-table th:nth-child(3),
+      .monthly-table td:nth-child(3) {{
+        width: 12%;
+      }}
+      .monthly-table th:nth-child(4),
+      .monthly-table td:nth-child(4) {{
+        width: 10%;
+      }}
+      .monthly-table th:nth-child(5),
+      .monthly-table td:nth-child(5),
+      .monthly-table th:nth-child(6),
+      .monthly-table td:nth-child(6) {{
+        width: 8%;
+      }}
+      .monthly-table th:nth-child(7),
+      .monthly-table td:nth-child(7) {{
+        width: 11%;
+      }}
+      .monthly-table th:nth-child(8),
+      .monthly-table td:nth-child(8),
+      .monthly-table th:nth-child(9),
+      .monthly-table td:nth-child(9) {{
+        width: 8%;
+      }}
+      .monthly-table th:nth-child(10),
+      .monthly-table td:nth-child(10) {{
+        width: 10%;
+      }}
+      .monthly-table th:nth-child(11),
+      .monthly-table td:nth-child(11) {{
+        display: none;
+      }}
+      .monthly-table .sort-indicator {{
+        display: none;
+      }}
+      .monthly-table .time-cell {{
+        color: #8ca0b7;
       }}
       .monthly-filter-field {{
         width: 100%;

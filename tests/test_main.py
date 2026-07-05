@@ -429,10 +429,12 @@ def test_monthly_revenue_tab_renders_records(tmp_path: Path) -> None:
     assert 'data-monthly-filter-operator data-operator="gt"' in html
     assert 'data-monthly-filter="revenueMillions"' in html
     assert 'data-monthly-filter="epsQoq"' in html
+    assert 'data-monthly-filter="ytdYoy"' in html
     assert 'data-revenue-millions="1026.88800000"' in html
     assert 'data-eps-qoq="117.64000000"' in html
     assert 'data-mom="14.10000000"' in html
     assert 'data-yoy="96.24000000"' in html
+    assert 'data-ytd-yoy="115.46000000"' in html
     assert "96.24%" in html
     assert "115.46%" in html
     assert "本月營收及累計營收較去年同期增加。" in html
