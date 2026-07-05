@@ -425,6 +425,8 @@ def test_monthly_revenue_tab_renders_records(tmp_path: Path) -> None:
     assert "0.567" in html
     assert "117.64%" in html
     assert "monthly-filter-bar" in html
+    assert "monthly-filter-operator" in html
+    assert 'data-monthly-filter-operator data-operator="gt"' in html
     assert 'data-monthly-filter="revenueMillions"' in html
     assert 'data-monthly-filter="epsQoq"' in html
     assert 'data-revenue-millions="1026.88800000"' in html
@@ -440,6 +442,7 @@ def test_monthly_revenue_tab_renders_records(tmp_path: Path) -> None:
     assert "最新偵測：05-07 16:00:00" in html
     assert "data-sortable-table" in html
     assert 'data-sort-type="number"' in html
+    assert '<span class="time-note">' not in html
     assert 'class="detail-toggle"' not in html
     assert "monthly-detail-panel" not in html
     assert "本公司董事會通過115年第一季合併財務報告" not in html
@@ -525,7 +528,7 @@ def test_monthly_revenue_tab_formats_utc_detected_at_as_taiwan_time(tmp_path: Pa
 
     assert "最新申報：07-01 18:56:15" in html
     assert "最新偵測：07-01 18:56:15" in html
-    assert ">07-01 18:56<span" in html
+    assert ">07-01 18:56</td>" in html
     assert "07-01 10:56" not in html
 
 

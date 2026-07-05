@@ -1517,7 +1517,6 @@ def render_monthly_revenue_table(records: list[dict[str, Any]]) -> str:
             continue
 
         for record in section_records:
-            time_note = "公告" if record.get("announced_at") else "偵測"
             note = monthly_note(record)
             revenue_value = record_field_value(record, "monthly_revenue", "本月", "營業收入-當月營收")
             mom_value = monthly_mom_percent(record)
@@ -1539,7 +1538,7 @@ def render_monthly_revenue_table(records: list[dict[str, Any]]) -> str:
                 <tr class="eps-data-row" data-monthly-filter-row{filter_attrs}>
                   <td class="code-cell" data-label="代號"{sort_value_attr(record.get("company_id", ""))}>{html.escape(str(record.get("company_id", "")))}</td>
                   <td class="name-cell" data-label="名稱"{sort_value_attr(record.get("company_name", ""))}>{html.escape(str(record.get("company_name", "")))}</td>
-                  <td class="time-cell" data-label="偵測時間"{sort_value_attr(event_sort_value(record))}>{html.escape(format_event_table_time(record))}<span class="time-note">{html.escape(time_note)}</span></td>
+                  <td class="time-cell" data-label="偵測時間"{sort_value_attr(event_sort_value(record))}>{html.escape(format_event_table_time(record))}</td>
                   <td class="metric-cell primary-metric" data-label="營收(M)"{sort_value_attr(metric_sort_value(revenue_value))}>{render_money_millions(revenue_value)}</td>
                   <td class="metric-cell" data-label="EPS(估)"{sort_value_attr(metric_sort_value(estimated_eps))}>{render_metric(estimated_eps)}</td>
                   <td class="metric-cell" data-label="前季EPS"{sort_value_attr(metric_sort_value(previous_quarter_eps))}>{render_metric(previous_quarter_eps)}</td>
@@ -1570,19 +1569,23 @@ def render_monthly_revenue_table(records: list[dict[str, Any]]) -> str:
     filter_bar = """
     <div class="monthly-filter-bar" data-monthly-filter-bar data-target-table="monthly-revenue-table">
       <label class="monthly-filter-field">
-        <span>營收(M) &gt;</span>
+        <span>營收(M)</span>
+        <button class="monthly-filter-operator" type="button" data-monthly-filter-operator data-operator="gt" aria-label="切換營收比較符號">&gt;</button>
         <input class="monthly-filter-input" type="number" inputmode="decimal" step="0.1" data-monthly-filter="revenueMillions" aria-label="營收大於多少百萬元">
       </label>
       <label class="monthly-filter-field">
-        <span>EPS季增率(估) &gt;</span>
+        <span>EPS季增率(估)</span>
+        <button class="monthly-filter-operator" type="button" data-monthly-filter-operator data-operator="gt" aria-label="切換EPS季增率估算比較符號">&gt;</button>
         <input class="monthly-filter-input" type="number" inputmode="decimal" step="0.1" data-monthly-filter="epsQoq" aria-label="EPS季增率估算大於多少百分比">
       </label>
       <label class="monthly-filter-field">
-        <span>MOM% &gt;</span>
+        <span>MOM%</span>
+        <button class="monthly-filter-operator" type="button" data-monthly-filter-operator data-operator="gt" aria-label="切換MOM比較符號">&gt;</button>
         <input class="monthly-filter-input" type="number" inputmode="decimal" step="0.1" data-monthly-filter="mom" aria-label="MOM大於多少百分比">
       </label>
       <label class="monthly-filter-field">
-        <span>YOY% &gt;</span>
+        <span>YOY%</span>
+        <button class="monthly-filter-operator" type="button" data-monthly-filter-operator data-operator="gt" aria-label="切換YOY比較符號">&gt;</button>
         <input class="monthly-filter-input" type="number" inputmode="decimal" step="0.1" data-monthly-filter="yoy" aria-label="YOY大於多少百分比">
       </label>
       <button class="monthly-filter-clear" type="button" data-monthly-filter-clear>清除</button>
@@ -2039,6 +2042,25 @@ def render_dashboard(
       font-size: 12px;
       font-weight: 900;
       white-space: nowrap;
+    }}
+    .monthly-filter-operator {{
+      width: 30px;
+      height: 28px;
+      border: 1px solid #334155;
+      border-radius: 5px;
+      color: #7bb7ff;
+      background: #151a2a;
+      font: inherit;
+      font-size: 14px;
+      font-weight: 900;
+      line-height: 1;
+      cursor: pointer;
+    }}
+    .monthly-filter-operator:hover,
+    .monthly-filter-operator:focus-visible {{
+      color: #ffffff;
+      border-color: #7bb7ff;
+      outline: none;
     }}
     .monthly-filter-input {{
       width: 82px;
@@ -2797,6 +2819,11 @@ def render_dashboard(
 
       const monthlyFilterBars = Array.from(document.querySelectorAll("[data-monthly-filter-bar]"));
       const parseFilterNumber = (value) => parseSortNumber(value);
+      const filterOperators = [
+        {{ key: "gt", label: ">" }},
+        {{ key: "lt", label: "<" }},
+        {{ key: "eq", label: "=" }},
+      ];
 
       monthlyFilterBars.forEach((bar) => {{
         const table = document.getElementById(bar.dataset.targetTable || "");
@@ -2805,10 +2832,26 @@ def render_dashboard(
         }}
 
         const inputs = Array.from(bar.querySelectorAll("[data-monthly-filter]"));
+        const operatorButtons = Array.from(bar.querySelectorAll("[data-monthly-filter-operator]"));
         const clearButton = bar.querySelector("[data-monthly-filter-clear]");
         const tbody = table.tBodies[0];
 
         const hasActiveFilters = () => inputs.some((input) => parseFilterNumber(input.value) !== null);
+
+        const filterOperatorFor = (input) => {{
+          const field = input.closest(".monthly-filter-field");
+          return field?.querySelector("[data-monthly-filter-operator]")?.dataset.operator || "gt";
+        }};
+
+        const compareFilterValue = (rowValue, threshold, operator) => {{
+          if (operator === "lt") {{
+            return rowValue < threshold;
+          }}
+          if (operator === "eq") {{
+            return Math.abs(rowValue - threshold) < 1e-9;
+          }}
+          return rowValue > threshold;
+        }};
 
         const rowMatchesFilters = (row) => {{
           return inputs.every((input) => {{
@@ -2818,7 +2861,8 @@ def render_dashboard(
             }}
             const key = input.dataset.monthlyFilter;
             const rowValue = parseFilterNumber(row.dataset[key] || "");
-            return rowValue !== null && rowValue > threshold;
+            const operator = filterOperatorFor(input);
+            return rowValue !== null && compareFilterValue(rowValue, threshold, operator);
           }});
         }};
 
@@ -2870,6 +2914,15 @@ def render_dashboard(
 
         inputs.forEach((input) => {{
           input.addEventListener("input", applyMonthlyFilters);
+        }});
+        operatorButtons.forEach((button) => {{
+          button.addEventListener("click", () => {{
+            const currentIndex = filterOperators.findIndex((operator) => operator.key === button.dataset.operator);
+            const nextOperator = filterOperators[(currentIndex + 1) % filterOperators.length];
+            button.dataset.operator = nextOperator.key;
+            button.textContent = nextOperator.label;
+            applyMonthlyFilters();
+          }});
         }});
         clearButton?.addEventListener("click", () => {{
           inputs.forEach((input) => {{
