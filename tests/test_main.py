@@ -424,6 +424,13 @@ def test_monthly_revenue_tab_renders_records(tmp_path: Path) -> None:
     assert "1.234" in html
     assert "0.567" in html
     assert "117.64%" in html
+    assert "monthly-filter-bar" in html
+    assert 'data-monthly-filter="revenueMillions"' in html
+    assert 'data-monthly-filter="epsQoq"' in html
+    assert 'data-revenue-millions="1026.88800000"' in html
+    assert 'data-eps-qoq="117.64000000"' in html
+    assert 'data-mom="14.10000000"' in html
+    assert 'data-yoy="96.24000000"' in html
     assert "96.24%" in html
     assert "115.46%" in html
     assert "本月營收及累計營收較去年同期增加。" in html
@@ -564,6 +571,37 @@ def test_market_reaction_converts_utc_detected_at_to_taiwan_time() -> None:
     )
 
     assert cutoff_date == date(2026, 7, 1)
+    assert market_unreacted == records
+    assert historical == []
+
+
+def test_market_reaction_treats_records_after_cutoff_date_as_unreacted() -> None:
+    records = [
+        {
+            "company_id": "3008",
+            "company_name": "大立光",
+            "event_type": "monthly_revenue",
+            "detected_at": "2026-07-05T08:06:19+08:00",
+            "event_time": "2026-07-05T08:06:19+08:00",
+            "data_month": "115/06",
+        },
+        {
+            "company_id": "8147",
+            "company_name": "正淩",
+            "event_type": "monthly_revenue",
+            "detected_at": "2026-07-04T14:40:50+08:00",
+            "event_time": "2026-07-04T14:40:50+08:00",
+            "data_month": "115/06",
+        },
+    ]
+
+    cutoff_date, market_unreacted, historical = split_records_by_market_reaction(
+        records,
+        now=datetime(2026, 7, 5, 11, 0),
+        trading_dates=[date(2026, 7, 3)],
+    )
+
+    assert cutoff_date == date(2026, 7, 3)
     assert market_unreacted == records
     assert historical == []
 

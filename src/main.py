@@ -282,6 +282,12 @@ def metric_sort_value(value: Any) -> str:
     return "" if number is None else f"{number:.8f}"
 
 
+def numeric_data_attr(name: str, value: Any, divisor: float = 1.0) -> str:
+    number = metric_float(value)
+    normalized = "" if number is None else f"{number / divisor:.8f}"
+    return f' data-{name}="{html.escape(normalized, quote=True)}"'
+
+
 def sortable_header(label: str, sort_type: str = "text") -> str:
     return (
         '<th scope="col" aria-sort="none">'
@@ -837,10 +843,8 @@ def is_market_unreacted_record(record: dict[str, Any], cutoff_date: date) -> boo
     event_at = event_datetime_in_taiwan(record)
     if event_at is None:
         return False
-    return (
-        event_at.date() == cutoff_date
-        and event_at.time().replace(tzinfo=None).strftime("%H:%M:%S") > MARKET_CLOSE_TIME_TEXT
-    )
+    cutoff_at = datetime.combine(cutoff_date, MARKET_CLOSE_TIME, tzinfo=TAIWAN_TZ)
+    return event_at > cutoff_at
 
 
 def split_records_by_market_reaction(
@@ -1485,11 +1489,11 @@ def render_monthly_revenue_table(records: list[dict[str, Any]]) -> str:
     cutoff_date, market_unreacted, historical = split_records_by_market_reaction(records)
     sections = [
         (
-            f"市場未反映（{format_month_day(cutoff_date)} 13:30 後公告）（{len(market_unreacted)} 筆）",
+            f"市場未反映（{format_month_day(cutoff_date)} 13:30 後偵測）（{len(market_unreacted)} 筆）",
             market_unreacted,
         ),
         (
-            f"歷史公告（{format_month_day(cutoff_date)} 13:30 前）（{len(historical)} 筆）",
+            f"歷史公告（{format_month_day(cutoff_date)} 13:30 前偵測）（{len(historical)} 筆）",
             historical,
         ),
     ]
@@ -1498,7 +1502,7 @@ def render_monthly_revenue_table(records: list[dict[str, Any]]) -> str:
         rows.append(
             f"""
             <tr class="eps-group-row">
-              <td colspan="11">{html.escape(section_title)}</td>
+              <td colspan="11" data-section-label="{html.escape(section_title.rsplit('（', 1)[0], quote=True)}">{html.escape(section_title)}</td>
             </tr>
             """
         )
@@ -1522,9 +1526,17 @@ def render_monthly_revenue_table(records: list[dict[str, Any]]) -> str:
             estimated_eps = monthly_eps_estimate_value(record, "estimated_eps")
             previous_quarter_eps = monthly_eps_estimate_value(record, "previous_quarter_eps")
             estimated_eps_qoq = monthly_eps_estimate_value(record, "estimated_eps_qoq_percent")
+            filter_attrs = "".join(
+                [
+                    numeric_data_attr("revenue-millions", revenue_value, divisor=1000),
+                    numeric_data_attr("eps-qoq", estimated_eps_qoq),
+                    numeric_data_attr("mom", mom_value),
+                    numeric_data_attr("yoy", yoy_value),
+                ]
+            )
             rows.append(
                 f"""
-                <tr class="eps-data-row">
+                <tr class="eps-data-row" data-monthly-filter-row{filter_attrs}>
                   <td class="code-cell" data-label="代號"{sort_value_attr(record.get("company_id", ""))}>{html.escape(str(record.get("company_id", "")))}</td>
                   <td class="name-cell" data-label="名稱"{sort_value_attr(record.get("company_name", ""))}>{html.escape(str(record.get("company_name", "")))}</td>
                   <td class="time-cell" data-label="偵測時間"{sort_value_attr(event_sort_value(record))}>{html.escape(format_event_table_time(record))}<span class="time-note">{html.escape(time_note)}</span></td>
@@ -1555,9 +1567,31 @@ def render_monthly_revenue_table(records: list[dict[str, Any]]) -> str:
             ("備註", "text"),
         ]
     )
+    filter_bar = """
+    <div class="monthly-filter-bar" data-monthly-filter-bar data-target-table="monthly-revenue-table">
+      <label class="monthly-filter-field">
+        <span>營收(M) &gt;</span>
+        <input class="monthly-filter-input" type="number" inputmode="decimal" step="0.1" data-monthly-filter="revenueMillions" aria-label="營收大於多少百萬元">
+      </label>
+      <label class="monthly-filter-field">
+        <span>EPS季增率(估) &gt;</span>
+        <input class="monthly-filter-input" type="number" inputmode="decimal" step="0.1" data-monthly-filter="epsQoq" aria-label="EPS季增率估算大於多少百分比">
+      </label>
+      <label class="monthly-filter-field">
+        <span>MOM% &gt;</span>
+        <input class="monthly-filter-input" type="number" inputmode="decimal" step="0.1" data-monthly-filter="mom" aria-label="MOM大於多少百分比">
+      </label>
+      <label class="monthly-filter-field">
+        <span>YOY% &gt;</span>
+        <input class="monthly-filter-input" type="number" inputmode="decimal" step="0.1" data-monthly-filter="yoy" aria-label="YOY大於多少百分比">
+      </label>
+      <button class="monthly-filter-clear" type="button" data-monthly-filter-clear>清除</button>
+    </div>
+    """
     return f"""
+    {filter_bar}
     <div class="eps-table-wrap">
-      <table class="eps-table monthly-table" data-sortable-table>
+      <table class="eps-table monthly-table" id="monthly-revenue-table" data-sortable-table>
         <thead>
           <tr>
             {headers}
@@ -1871,7 +1905,7 @@ def render_dashboard(
       color: var(--ink);
     }}
     main {{
-      width: min(1160px, calc(100% - 32px));
+      width: min(1520px, calc(100% - 32px));
       margin: 24px auto 48px;
     }}
     .topbar {{
@@ -1978,6 +2012,66 @@ def render_dashboard(
     .monthly-summary-meta {{
       display: grid;
       gap: 1px;
+    }}
+    .monthly-filter-bar {{
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 14px 0 -4px;
+      padding: 10px;
+      background: #111421;
+      border: 1px solid #263041;
+      border-radius: 8px;
+    }}
+    .monthly-filter-field {{
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 34px;
+      padding: 3px 7px;
+      background: #0d101a;
+      border: 1px solid #252b39;
+      border-radius: 6px;
+    }}
+    .monthly-filter-field span {{
+      color: #a6b2c3;
+      font-size: 12px;
+      font-weight: 900;
+      white-space: nowrap;
+    }}
+    .monthly-filter-input {{
+      width: 82px;
+      height: 28px;
+      border: 1px solid #334155;
+      border-radius: 5px;
+      padding: 4px 7px;
+      color: #eef3fb;
+      background: #151a2a;
+      font: inherit;
+      font-size: 13px;
+      font-weight: 800;
+      outline: none;
+    }}
+    .monthly-filter-input:focus {{
+      border-color: #7bb7ff;
+      box-shadow: 0 0 0 3px rgba(98, 180, 255, 0.14);
+    }}
+    .monthly-filter-clear {{
+      height: 34px;
+      border: 1px solid #334155;
+      border-radius: 6px;
+      padding: 6px 10px;
+      color: #a6b2c3;
+      background: #171b29;
+      font: inherit;
+      font-size: 12px;
+      font-weight: 900;
+      cursor: pointer;
+    }}
+    .monthly-filter-clear:hover {{
+      color: #ffffff;
+      border-color: #7bb7ff;
     }}
     .tab-switcher {{
       display: inline-flex;
@@ -2101,7 +2195,7 @@ def render_dashboard(
     }}
     .eps-table {{
       width: 100%;
-      min-width: 980px;
+      min-width: 1240px;
       border-collapse: collapse;
       color: #d8dde7;
       background: #111421;
@@ -2180,15 +2274,15 @@ def render_dashboard(
       justify-content: flex-start;
     }}
     .monthly-table {{
-      min-width: 1080px;
+      min-width: 1540px;
     }}
     .financial-table {{
-      min-width: 1180px;
+      min-width: 1320px;
     }}
-    .monthly-table th:nth-child(8),
-    .monthly-table td:nth-child(8),
-    .financial-table th:nth-child(10),
-    .financial-table td:nth-child(10) {{
+    .monthly-table th:nth-child(11),
+    .monthly-table td:nth-child(11),
+    .financial-table th:nth-child(9),
+    .financial-table td:nth-child(9) {{
       text-align: left;
     }}
     .subject-cell {{
@@ -2271,10 +2365,11 @@ def render_dashboard(
       font-weight: 800;
     }}
     .note-cell {{
-      min-width: 260px;
-      max-width: 460px;
+      min-width: 420px;
+      max-width: 680px;
       color: #b9c2cf;
       line-height: 1.5;
+      text-align: left;
       white-space: normal !important;
       overflow-wrap: anywhere;
     }}
@@ -2384,90 +2479,65 @@ def render_dashboard(
     }}
     @media (max-width: 900px) {{
       .eps-table-wrap {{
-        overflow-x: visible;
-        background: transparent;
-        border: 0;
-        border-radius: 0;
+        overflow-x: auto;
+        background: #111421;
+        border: 1px solid #263041;
+        border-radius: 8px;
         box-shadow: none;
       }}
       .eps-table {{
-        display: block;
-        min-width: 0;
-        background: transparent;
+        display: table;
+        min-width: 1120px;
+        font-size: 12px;
+        background: #111421;
       }}
       .eps-table thead {{
-        display: none;
+        display: table-header-group;
       }}
       .eps-table tbody {{
-        display: grid;
-        gap: 10px;
+        display: table-row-group;
       }}
       .eps-table tr {{
-        display: block;
+        display: table-row;
       }}
-      .eps-group-row td {{
-        display: block;
-        border: 1px solid #293348;
-        border-radius: 8px;
-        padding: 12px;
+      .monthly-table {{
+        min-width: 1480px;
       }}
-      .eps-data-row {{
-        display: grid !important;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        column-gap: 14px;
-        padding: 10px 12px;
-        background: #111421;
-        border: 1px solid #263041;
-        border-radius: 8px;
+      .financial-table {{
+        min-width: 1260px;
       }}
+      .eps-table th,
       .eps-table td {{
-        display: flex;
-        align-items: baseline;
-        justify-content: space-between;
-        gap: 10px;
-        min-width: 0;
-        padding: 8px 0;
+        display: table-cell;
+        padding: 8px 9px;
         border-bottom: 1px solid #252b39;
         text-align: right;
-        white-space: normal;
+        vertical-align: top;
+        white-space: nowrap;
+      }}
+      .eps-group-row td {{
+        border-radius: 0;
+        padding: 9px;
       }}
       .eps-table td::before {{
-        content: attr(data-label);
-        flex: 0 0 auto;
-        color: #7f8a99;
-        font-weight: 800;
-        text-align: left;
-      }}
-      .eps-group-row td::before,
-      .eps-detail-panel-row td::before,
-      .detail-cell::before {{
         content: none;
       }}
       .primary-metric {{
-        border-left: 0;
+        border-left: 1px solid #394456;
       }}
+      .subject-cell,
+      .note-cell,
       .detail-cell {{
-        display: flex !important;
-        grid-column: 1 / -1;
-        justify-content: flex-start !important;
-        min-width: 0;
-        padding-top: 10px !important;
-        border-bottom: 0 !important;
+        white-space: normal !important;
       }}
       .detail-toggle {{
-        width: 100%;
-        min-height: 36px;
-      }}
-      .eps-detail-panel-row {{
-        margin-top: -10px;
+        min-height: 30px;
       }}
       .eps-detail-panel-row td {{
-        display: block;
-        padding: 0 12px 12px;
-        background: #111421;
-        border: 1px solid #263041;
-        border-top: 0;
-        border-radius: 0 0 8px 8px;
+        display: table-cell;
+        padding: 12px 14px 16px;
+        background: #0f1320;
+        border: 1px solid #394456;
       }}
       .detail-panel {{
         max-height: 52vh;
@@ -2479,10 +2549,20 @@ def render_dashboard(
     }}
     @media (max-width: 520px) {{
       .eps-data-row {{
-        grid-template-columns: 1fr;
+        display: table-row;
       }}
       .eps-table td {{
-        gap: 16px;
+        padding: 7px 8px;
+      }}
+      .monthly-filter-field {{
+        width: 100%;
+        justify-content: space-between;
+      }}
+      .monthly-filter-input {{
+        width: 112px;
+      }}
+      .monthly-filter-clear {{
+        width: 100%;
       }}
     }}
     @media (max-width: 720px) {{
@@ -2713,6 +2793,91 @@ def render_dashboard(
             renderSortedTable(table, columnIndex, sortType, nextDirection);
           }});
         }});
+      }});
+
+      const monthlyFilterBars = Array.from(document.querySelectorAll("[data-monthly-filter-bar]"));
+      const parseFilterNumber = (value) => parseSortNumber(value);
+
+      monthlyFilterBars.forEach((bar) => {{
+        const table = document.getElementById(bar.dataset.targetTable || "");
+        if (!table) {{
+          return;
+        }}
+
+        const inputs = Array.from(bar.querySelectorAll("[data-monthly-filter]"));
+        const clearButton = bar.querySelector("[data-monthly-filter-clear]");
+        const tbody = table.tBodies[0];
+
+        const hasActiveFilters = () => inputs.some((input) => parseFilterNumber(input.value) !== null);
+
+        const rowMatchesFilters = (row) => {{
+          return inputs.every((input) => {{
+            const threshold = parseFilterNumber(input.value);
+            if (threshold === null) {{
+              return true;
+            }}
+            const key = input.dataset.monthlyFilter;
+            const rowValue = parseFilterNumber(row.dataset[key] || "");
+            return rowValue !== null && rowValue > threshold;
+          }});
+        }};
+
+        const updateSectionCounts = () => {{
+          if (!tbody) {{
+            return;
+          }}
+          const active = hasActiveFilters();
+          let sectionCell = null;
+          let total = 0;
+          let visible = 0;
+
+          const flush = () => {{
+            if (!sectionCell) {{
+              return;
+            }}
+            const base = sectionCell.dataset.sectionLabel || sectionCell.textContent || "";
+            sectionCell.textContent = active
+              ? `${{base}}（${{visible}} / ${{total}} 筆）`
+              : `${{base}}（${{total}} 筆）`;
+          }};
+
+          Array.from(tbody.children).forEach((row) => {{
+            if (row.classList.contains("eps-group-row")) {{
+              flush();
+              sectionCell = row.cells[0] || null;
+              total = 0;
+              visible = 0;
+              return;
+            }}
+            if (!row.matches("[data-monthly-filter-row]")) {{
+              return;
+            }}
+            total += 1;
+            if (!row.hidden) {{
+              visible += 1;
+            }}
+          }});
+          flush();
+        }};
+
+        const applyMonthlyFilters = () => {{
+          const rows = Array.from(table.querySelectorAll("[data-monthly-filter-row]"));
+          rows.forEach((row) => {{
+            row.hidden = !rowMatchesFilters(row);
+          }});
+          updateSectionCounts();
+        }};
+
+        inputs.forEach((input) => {{
+          input.addEventListener("input", applyMonthlyFilters);
+        }});
+        clearButton?.addEventListener("click", () => {{
+          inputs.forEach((input) => {{
+            input.value = "";
+          }});
+          applyMonthlyFilters();
+        }});
+        applyMonthlyFilters();
       }});
     }})();
   </script>
