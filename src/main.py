@@ -1988,7 +1988,7 @@ def render_dashboard(
       min-height: 100vh;
       padding-bottom: 30px;
       font-family: Consolas, "IBM Plex Mono", "Roboto Mono", "Courier New", monospace;
-      font-size: 14px;
+      font-size: 13px;
       line-height: 1.35;
       background: var(--bg);
       color: var(--ink);
@@ -1998,7 +1998,7 @@ def render_dashboard(
       margin: 24px auto 48px;
     }}
     .topbar {{
-      padding: 0 0 10px;
+      padding: 0 0 6px;
       border-bottom: 1px solid var(--line);
     }}
     .topbar-content {{
@@ -2019,7 +2019,7 @@ def render_dashboard(
     }}
     h1 {{
       margin: 0;
-      font-size: 22px;
+      font-size: 21px;
       letter-spacing: 0;
     }}
     .badge {{
@@ -2030,28 +2030,28 @@ def render_dashboard(
       background: #dcfce7;
       border: 1px solid #86efac;
       border-radius: 4px;
-      font-size: 14px;
+      font-size: 13px;
       font-weight: 700;
     }}
     .searchbar {{
       display: flex;
       align-items: center;
-      gap: 6px;
+      gap: 4px;
       min-width: 0;
       margin: 0;
-      padding: 5px 6px;
+      padding: 3px 5px;
       background: #151927;
       border: 1px solid #2b3445;
       border-radius: 6px;
     }}
     .searchbar input[type="search"] {{
       width: 160px;
-      height: 30px;
+      height: 26px;
       border: 1px solid var(--line);
       border-radius: 5px;
-      padding: 5px 8px;
+      padding: 3px 7px;
       font: inherit;
-      font-size: 14px;
+      font-size: 13px;
       color: var(--ink);
       background: var(--panel-3);
       outline: none;
@@ -2065,11 +2065,11 @@ def render_dashboard(
     }}
     .searchbar button,
     .searchbar a {{
-      height: 30px;
+      height: 26px;
       border-radius: 5px;
-      padding: 5px 9px;
+      padding: 3px 8px;
       font: inherit;
-      font-size: 14px;
+      font-size: 13px;
       text-decoration: none;
     }}
     .searchbar button {{
@@ -2099,7 +2099,7 @@ def render_dashboard(
     .panel-heading h2 {{
       margin: 0;
       color: #f3f6fb;
-      font-size: 20px;
+      font-size: 19px;
       line-height: 1.3;
       letter-spacing: 0;
     }}
@@ -2117,7 +2117,7 @@ def render_dashboard(
     .panel-heading p {{
       margin: 5px 0 0;
       color: var(--muted);
-      font-size: 15px;
+      font-size: 14px;
     }}
     .meta-strip {{
       display: flex;
@@ -2126,7 +2126,7 @@ def render_dashboard(
       gap: 4px 9px;
       min-width: 0;
       color: var(--muted);
-      font-size: 14px;
+      font-size: 13px;
       line-height: 1.45;
     }}
     .panel-meta-strip {{
@@ -2177,7 +2177,7 @@ def render_dashboard(
     }}
     .monthly-filter-field span {{
       color: #a6b2c3;
-      font-size: 14px;
+      font-size: 13px;
       font-weight: 900;
       white-space: nowrap;
     }}
@@ -2189,7 +2189,7 @@ def render_dashboard(
       color: #7bb7ff;
       background: #151a2a;
       font: inherit;
-      font-size: 16px;
+      font-size: 15px;
       font-weight: 900;
       line-height: 1;
       cursor: pointer;
@@ -2209,7 +2209,7 @@ def render_dashboard(
       color: #eef3fb;
       background: #151a2a;
       font: inherit;
-      font-size: 15px;
+      font-size: 14px;
       font-weight: 800;
       outline: none;
     }}
@@ -2225,7 +2225,7 @@ def render_dashboard(
       color: #a6b2c3;
       background: #171b29;
       font: inherit;
-      font-size: 14px;
+      font-size: 13px;
       font-weight: 900;
       cursor: pointer;
     }}
@@ -2237,22 +2237,22 @@ def render_dashboard(
       display: inline-flex;
       flex: 0 0 auto;
       gap: 2px;
-      padding: 3px;
+      padding: 2px;
       border: 1px solid var(--line);
-      border-radius: 6px;
+      border-radius: 5px;
       background: var(--panel-3);
     }}
     .tab-link {{
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      min-height: 32px;
-      padding: 6px 12px;
+      min-height: 28px;
+      padding: 4px 10px;
       border: 1px solid transparent;
-      border-radius: 4px;
+      border-radius: 5px;
       color: #a6b2c3;
       text-decoration: none;
-      font-size: 15px;
+      font-size: 14px;
       font-weight: 800;
       white-space: nowrap;
     }}
@@ -2286,7 +2286,7 @@ def render_dashboard(
       color: #7f8a99;
       background: rgba(13, 16, 26, 0.94);
       border-top: 1px solid #252b39;
-      font-size: 13px;
+      font-size: 12px;
       line-height: 1.25;
       backdrop-filter: blur(6px);
     }}
@@ -2316,7 +2316,7 @@ def render_dashboard(
       justify-content: space-between;
       gap: 12px;
       color: var(--muted);
-      font-size: 15px;
+      font-size: 14px;
     }}
     .company {{
       display: flex;
@@ -2329,7 +2329,7 @@ def render_dashboard(
       background: #475467;
       border-radius: 4px;
       padding: 2px 6px;
-      font-size: 14px;
+      font-size: 13px;
     }}
     .company strong {{
       overflow-wrap: anywhere;
@@ -2340,7 +2340,7 @@ def render_dashboard(
     }}
     h2 {{
       margin: 14px 0;
-      font-size: 19px;
+      font-size: 18px;
       line-height: 1.5;
       letter-spacing: 0;
     }}
@@ -2352,12 +2352,12 @@ def render_dashboard(
     }}
     dt {{
       color: var(--muted);
-      font-size: 14px;
+      font-size: 13px;
     }}
     dd {{
       margin: 3px 0 0;
       overflow-wrap: anywhere;
-      font-size: 16px;
+      font-size: 15px;
     }}
     details {{
       border-top: 1px solid var(--line);
@@ -2373,7 +2373,7 @@ def render_dashboard(
       overflow-wrap: anywhere;
       margin: 12px 0 0;
       font-family: "Microsoft JhengHei", "Noto Sans TC", monospace;
-      font-size: 16px;
+      font-size: 15px;
       line-height: 1.6;
     }}
     .eps-table-wrap {{
@@ -2390,7 +2390,7 @@ def render_dashboard(
       border-collapse: collapse;
       color: #d8dde7;
       background: #111421;
-      font-size: 16px;
+      font-size: 15px;
     }}
     .eps-table th,
     .eps-table td {{
@@ -2403,7 +2403,7 @@ def render_dashboard(
     .eps-table th {{
       color: #7f8a99;
       background: #171b29;
-      font-size: 15px;
+      font-size: 14px;
       font-weight: 800;
     }}
     .sort-button {{
@@ -2437,7 +2437,7 @@ def render_dashboard(
       justify-content: center;
       width: 10px;
       color: #64748b;
-      font-size: 12px;
+      font-size: 11px;
       line-height: 1;
     }}
     .sort-indicator::before {{
@@ -2518,14 +2518,14 @@ def render_dashboard(
       min-width: 112px;
     }}
     .detail-toggle {{
-      min-height: 30px;
+      min-height: 28px;
       color: #7bb7ff;
       background: transparent;
       border: 1px solid #334155;
-      border-radius: 6px;
-      padding: 5px 9px;
+      border-radius: 5px;
+      padding: 4px 8px;
       font: inherit;
-      font-size: 15px;
+      font-size: 14px;
       font-weight: 800;
       cursor: pointer;
     }}
@@ -2544,7 +2544,7 @@ def render_dashboard(
       background: #17324d;
       border: 1px solid #31577c;
       border-radius: 4px;
-      font-size: 14px;
+      font-size: 13px;
       font-weight: 900;
       white-space: nowrap;
     }}
@@ -2552,7 +2552,7 @@ def render_dashboard(
       display: block;
       margin-top: 3px;
       color: #8ca0b7;
-      font-size: 13px;
+      font-size: 12px;
       font-weight: 800;
     }}
     .note-cell {{
@@ -2616,7 +2616,7 @@ def render_dashboard(
     .detail-meta-line {{
       margin-top: 8px;
       color: #8ca0b7;
-      font-size: 14px;
+      font-size: 13px;
       font-weight: 800;
     }}
     .time-cell,
@@ -2681,12 +2681,12 @@ def render_dashboard(
       margin: 8px auto 34px;
     }}
     .topbar {{
-      padding-bottom: 6px;
+      padding-bottom: 3px;
       border-bottom-color: var(--line);
     }}
     .dashboard-panel-header {{
-      gap: 8px;
-      margin-top: 4px;
+      gap: 6px;
+      margin-top: 2px;
     }}
     .searchbar,
     .monthly-filter-bar,
@@ -2743,6 +2743,28 @@ def render_dashboard(
       background: var(--neutral);
       border-color: var(--neutral);
     }}
+    .searchbar {{
+      gap: 4px;
+      padding: 2px 4px;
+    }}
+    .searchbar input[type="search"],
+    .searchbar button,
+    .searchbar a {{
+      height: 26px;
+    }}
+    .searchbar button,
+    .searchbar a,
+    .tab-switcher,
+    .tab-link {{
+      border-radius: 5px;
+    }}
+    .tab-switcher {{
+      padding: 2px;
+    }}
+    .tab-link {{
+      min-height: 26px;
+      padding: 3px 9px;
+    }}
     .meta-label,
     .eps-table th,
     .monthly-filter-field span,
@@ -2781,7 +2803,7 @@ def render_dashboard(
     .monthly-filter-operator,
     .monthly-filter-input {{
       height: 24px;
-      font-size: 14px;
+      font-size: 13px;
     }}
     .monthly-filter-clear {{
       height: 28px;
@@ -2802,7 +2824,7 @@ def render_dashboard(
     }}
     .news-card h2 {{
       margin: 8px 0;
-      font-size: 15px;
+      font-size: 14px;
       line-height: 1.35;
       color: var(--ink);
     }}
@@ -2811,11 +2833,11 @@ def render_dashboard(
       margin-bottom: 8px;
     }}
     dt {{
-      font-size: 13px;
+      font-size: 12px;
     }}
     dd,
     pre {{
-      font-size: 14px;
+      font-size: 13px;
       line-height: 1.4;
     }}
     .eps-table-wrap {{
@@ -2824,7 +2846,7 @@ def render_dashboard(
     .eps-table {{
       color: var(--ink);
       background: #000000;
-      font-size: 14px;
+      font-size: 13px;
       font-variant-numeric: tabular-nums;
     }}
     .eps-table th,
@@ -2834,7 +2856,7 @@ def render_dashboard(
     }}
     .eps-table th {{
       background: var(--panel);
-      font-size: 13px;
+      font-size: 12px;
       color: var(--ink);
     }}
     .eps-data-row td {{
@@ -2851,6 +2873,8 @@ def render_dashboard(
       color: #000000;
       background: var(--accent);
       border-bottom: 1px solid var(--accent);
+      padding: 4px 8px;
+      line-height: 1.15;
     }}
     .eps-empty-row td {{
       color: var(--muted);
@@ -2939,7 +2963,7 @@ def render_dashboard(
       .eps-table {{
         display: table;
         min-width: 1120px;
-        font-size: 14px;
+        font-size: 13px;
         background: #000000;
       }}
       .eps-table thead {{
@@ -2968,7 +2992,7 @@ def render_dashboard(
       }}
       .eps-group-row td {{
         border-radius: 0;
-        padding: 9px;
+        padding: 5px 8px;
       }}
       .eps-table td::before {{
         content: none;
@@ -2982,7 +3006,7 @@ def render_dashboard(
         white-space: normal !important;
       }}
       .detail-toggle {{
-        min-height: 30px;
+        min-height: 28px;
       }}
       .eps-detail-panel-row td {{
         display: table-cell;
@@ -3005,11 +3029,14 @@ def render_dashboard(
       .eps-table td {{
         padding: 7px 8px;
       }}
+      .eps-group-row td {{
+        padding: 4px 8px;
+      }}
       .monthly-table {{
         width: 100%;
         min-width: 0;
         table-layout: fixed;
-        font-size: 11.5px;
+        font-size: 10.5px;
       }}
       .monthly-table th,
       .monthly-table td {{
