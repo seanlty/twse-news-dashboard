@@ -192,6 +192,7 @@ class FakeMonthlyRevenueCrawler:
                 "subject": "本公司董事會通過115年第一季合併財務報告",
                 "announced_at": "2026-05-07T15:16:29",
                 "event_time": "2026-05-07T15:16:29",
+                "detail_payload": {"TYPEK": "sii"},
                 "metrics": {
                     "operating_revenue": "2370728",
                     "gross_profit": "424988",
@@ -299,6 +300,7 @@ class FakeFinancialReportCrawler:
                 "spoke_date": "2026-05-14",
                 "spoke_time": "17:30:33",
                 "subject": "公告本公司董事會通過115年第一季合併財務報告",
+                "detail_payload": {"TYPEK": "sii"},
                 "detail_preview": {"description": FINANCIAL_REPORT_DETAIL},
             }
         ]
@@ -764,6 +766,7 @@ def test_seed_persistent_cache_files_promotes_existing_seed_to_active_cache(tmp_
                 "event_type": "financial_report",
                 "quarter": "2026Q1",
                 "detected_at": "2026-05-14T17:31:00+08:00",
+                "detail_payload": {"TYPEK": "sii"},
             }
         ],
         source_raw / "financial_report_latest.json",
@@ -952,6 +955,7 @@ def test_financial_report_tab_renders_financial_records(tmp_path: Path) -> None:
                 "announced_at": "2026-05-14T17:30:33",
                 "event_time": "2026-05-14T17:30:33",
                 "detected_at": "2026-05-14T17:31:00+08:00",
+                "detail_payload": {"TYPEK": "sii"},
                 "eps": 1.51,
                 "previous_quarter": "2025Q4",
                 "previous_quarter_eps": -0.33,
@@ -1023,6 +1027,7 @@ def test_financial_report_tab_only_displays_latest_quarter(tmp_path: Path) -> No
                 "company_name": "舊季",
                 "quarter": "2025Q4",
                 "event_time": "2026-03-01T16:00:00",
+                "detail_payload": {"TYPEK": "sii"},
                 "eps": 0.1,
                 "detail": {"description": "舊季財務報告"},
             },
@@ -1032,6 +1037,7 @@ def test_financial_report_tab_only_displays_latest_quarter(tmp_path: Path) -> No
                 "company_name": "新季",
                 "quarter": "2026Q1",
                 "event_time": "2026-05-14T17:30:33",
+                "detail_payload": {"TYPEK": "otc"},
                 "eps": 1.2,
                 "detail": {"description": "新季財務報告"},
             },
@@ -1051,6 +1057,58 @@ def test_financial_report_tab_only_displays_latest_quarter(tmp_path: Path) -> No
     assert_meta_strip_item(html, "財報季度", "Q1")
 
 
+def test_financial_report_tab_excludes_emerging_market_records(tmp_path: Path) -> None:
+    financial_cache = tmp_path / "financial-report-cache.json"
+    save_records(
+        [
+            {
+                "event_type": "financial_report",
+                "company_id": "2222",
+                "company_name": "上市公司",
+                "quarter": "2026Q2",
+                "event_time": "2026-08-14T17:30:33",
+                "detail_payload": {"TYPEK": "sii"},
+                "eps": 1.2,
+                "detail": {"description": "上市公司財務報告"},
+            },
+            {
+                "event_type": "financial_report",
+                "company_id": "3333",
+                "company_name": "上櫃公司",
+                "quarter": "2026Q2",
+                "event_time": "2026-08-14T17:31:33",
+                "detail_payload": {"TYPEK": "otc"},
+                "eps": 2.3,
+                "detail": {"description": "上櫃公司財務報告"},
+            },
+            {
+                "event_type": "financial_report",
+                "company_id": "4444",
+                "company_name": "興櫃公司",
+                "quarter": "2026Q2",
+                "event_time": "2026-08-14T17:32:33",
+                "detail_payload": {"TYPEK": "rotc"},
+                "eps": 3.4,
+                "detail": {"description": "興櫃公司財務報告"},
+            },
+        ],
+        financial_cache,
+    )
+    dashboard = make_dashboard(
+        range_cache_file=tmp_path / "missing-cache.json",
+        crawler=FailingCrawler(),
+        financial_report_output_path=financial_cache,
+        financial_report_target_quarter="2026Q2",
+    )
+
+    html = fetch_dashboard_html(dashboard, f"/?tab={TAB_FINANCIAL_REPORT}")
+
+    assert "上市公司" in html
+    assert "上櫃公司" in html
+    assert "興櫃公司" not in html
+    assert_meta_strip_item(html, "已收錄", "2 筆")
+
+
 def test_financial_report_tab_falls_back_to_previous_quarter_until_target_arrives(tmp_path: Path) -> None:
     financial_cache = tmp_path / "financial-report-cache.json"
     save_records(
@@ -1061,6 +1119,7 @@ def test_financial_report_tab_falls_back_to_previous_quarter_until_target_arrive
                 "company_name": "更舊季",
                 "quarter": "2025Q4",
                 "event_time": "2026-03-01T16:00:00",
+                "detail_payload": {"TYPEK": "sii"},
                 "eps": 0.1,
                 "detail": {"description": "更舊季財務報告"},
             },
@@ -1070,6 +1129,7 @@ def test_financial_report_tab_falls_back_to_previous_quarter_until_target_arrive
                 "company_name": "上一季一",
                 "quarter": "2026Q1",
                 "event_time": "2026-05-14T17:30:33",
+                "detail_payload": {"TYPEK": "sii"},
                 "eps": 1.2,
                 "detail": {"description": "上一季一財務報告"},
             },
@@ -1079,6 +1139,7 @@ def test_financial_report_tab_falls_back_to_previous_quarter_until_target_arrive
                 "company_name": "上一季二",
                 "quarter": "2026Q1",
                 "event_time": "2026-05-14T17:31:33",
+                "detail_payload": {"TYPEK": "otc"},
                 "eps": 2.3,
                 "detail": {"description": "上一季二財務報告"},
             },
@@ -1110,6 +1171,7 @@ def test_financial_report_tab_switches_to_target_quarter_when_available(tmp_path
                 "company_name": "上一季",
                 "quarter": "2026Q1",
                 "event_time": "2026-05-14T17:30:33",
+                "detail_payload": {"TYPEK": "sii"},
                 "eps": 1.2,
                 "detail": {"description": "上一季財務報告"},
             },
@@ -1119,6 +1181,7 @@ def test_financial_report_tab_switches_to_target_quarter_when_available(tmp_path
                 "company_name": "目標季",
                 "quarter": "2026Q2",
                 "event_time": "2026-08-14T17:30:33",
+                "detail_payload": {"TYPEK": "otc"},
                 "eps": 2.4,
                 "detail": {"description": "目標季財務報告"},
             },
@@ -1172,6 +1235,63 @@ def test_update_financial_report_cache_writes_active_cache_and_meta(tmp_path: Pa
     assert meta["newest_announced_at"].startswith("2026-05-14T17:30:33")
 
 
+def test_update_financial_report_cache_persists_only_listed_and_otc_records(tmp_path: Path) -> None:
+    class MixedMarketFinancialReportCrawler:
+        def fetch_previous_day_summaries(self, target_date=None, market: str = "all") -> list[dict]:
+            return [
+                {
+                    "company_id": "4739",
+                    "company_name": "康普",
+                    "spoke_date_roc": "115/05/14",
+                    "spoke_date": "2026-05-14",
+                    "spoke_time": "17:30:33",
+                    "subject": "公告本公司董事會通過115年第一季合併財務報告",
+                    "detail_payload": {"TYPEK": "sii"},
+                    "detail_preview": {"description": FINANCIAL_REPORT_DETAIL},
+                },
+                {
+                    "company_id": "3585",
+                    "company_name": "聯致",
+                    "spoke_date_roc": "115/05/14",
+                    "spoke_date": "2026-05-14",
+                    "spoke_time": "17:31:33",
+                    "subject": "公告本公司董事會通過115年第一季合併財務報告",
+                    "detail_payload": {"TYPEK": "rotc"},
+                    "detail_preview": {"description": FINANCIAL_REPORT_DETAIL},
+                },
+            ]
+
+    financial_cache = tmp_path / "financial-report-cache.json"
+    save_records(
+        [
+            {
+                "event_type": "financial_report",
+                "company_id": "6867",
+                "company_name": "坦德科技",
+                "quarter": "2026Q1",
+                "event_time": "2026-05-13T17:30:33",
+                "detail_payload": {"TYPEK": "rotc"},
+                "detail": {"description": "興櫃舊資料"},
+            }
+        ],
+        financial_cache,
+    )
+    dashboard = make_dashboard(
+        crawler=MixedMarketFinancialReportCrawler(),
+        financial_report_output_path=financial_cache,
+        financial_report_target_quarter="2026Q1",
+        financial_report_lookback_days=1,
+    )
+
+    result = dashboard.update_financial_report_cache(reference_date=date(2026, 5, 14))
+    records = dashboard._load_offline_records(financial_cache)
+
+    assert result["ok"] is True
+    assert result["fetched_count"] == 1
+    assert [record["company_id"] for record in records] == ["4739"]
+    assert records[0]["detail_payload"]["TYPEK"] == "sii"
+
+
 def test_update_financial_report_cache_keeps_previous_display_quarter_until_target_arrives(
     tmp_path: Path,
 ) -> None:
@@ -1185,6 +1305,7 @@ def test_update_financial_report_cache_keeps_previous_display_quarter_until_targ
                 "quarter": "2026Q1",
                 "event_time": "2026-05-14T17:30:33",
                 "detected_at": "2026-05-14T17:31:00+08:00",
+                "detail_payload": {"TYPEK": "sii"},
             }
         ],
         financial_cache,
@@ -1220,6 +1341,7 @@ def test_update_financial_report_cache_records_failure_in_meta(tmp_path: Path) -
                 "quarter": "2026Q1",
                 "event_time": "2026-05-14T17:30:33",
                 "detected_at": "2026-05-14T17:31:00+08:00",
+                "detail_payload": {"TYPEK": "sii"},
             }
         ],
         financial_cache,

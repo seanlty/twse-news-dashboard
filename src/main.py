@@ -1185,7 +1185,9 @@ def build_financial_report_cache_meta(
     records: list[dict[str, Any]],
     **fields: Any,
 ) -> dict[str, Any]:
-    financial_records = [record for record in records if is_financial_report_record(record)]
+    financial_records = filter_records_by_listing_market(
+        [record for record in records if is_financial_report_record(record)]
+    )
     target_quarter = str(fields.get("target_quarter") or "").strip() or None
     display_records = select_display_financial_report_records(financial_records, target_quarter)
     display_quarter = str(display_records[0].get("quarter", "")) if display_records else ""
@@ -1229,7 +1231,9 @@ def format_financial_report_cache_source(
 ) -> str:
     meta = load_financial_report_cache_meta(cache_file)
     source_label = str(meta.get("source_label") or "MOPS 重大訊息財報 + 持久化快取")
-    financial_records = [record for record in records if is_financial_report_record(record)]
+    financial_records = filter_records_by_listing_market(
+        [record for record in records if is_financial_report_record(record)]
+    )
     display_target_quarter = target_quarter or str(meta.get("target_quarter") or "").strip() or None
     display_records = select_display_financial_report_records(
         financial_records,
@@ -4029,7 +4033,12 @@ class DashboardServer:
                 ]
             self.cache_at[cache_key] = now
 
-        records = [record for record in self.cache_records.get(cache_key, []) if is_financial_report_record(record)]
+        records = [
+            record
+            for record in self.cache_records.get(cache_key, [])
+            if is_financial_report_record(record)
+        ]
+        records = filter_records_by_listing_market(records)
         records = select_display_financial_report_records(records, target_quarter)
         records = filter_monthly_records_by_company_id(records, search_query)
         source_record = self.cache_records.get(
@@ -4124,6 +4133,9 @@ class DashboardServer:
 
         try:
             existing_records = self._load_offline_records(cache_file) if cache_file.exists() else []
+            existing_records = filter_records_by_listing_market(
+                [record for record in existing_records if is_financial_report_record(record)]
+            )
             before_count = len(dedupe_financial_report_records(existing_records))
             for query_date in query_dates:
                 try:
@@ -4161,7 +4173,7 @@ class DashboardServer:
                         target_quarter=selected_target_quarter,
                         detected_at=update_started_at,
                     )
-                    if record is not None:
+                    if record is not None and record_typek(record) in LISTED_OTC_MARKETS:
                         latest_records.append(record)
 
             if fetch_errors and len(fetch_errors) == len(query_dates):
