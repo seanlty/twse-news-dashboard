@@ -77,7 +77,8 @@ Current display flow:
 3. The page keeps only financial-report records and first tries to display the scheduler target quarter.
 4. Before the target quarter appears, the newest available prior quarter remains visible.
 5. After any target-quarter row appears, only that target quarter is displayed.
-6. Rows expose `quarter`, `eps`, `gross_margin_pct`, `operating_margin_pct`, and `non_operating_pct`; the cache keeps full quarter keys such as `2026Q1`, while the UI displays `Q1`/`Q2`/`Q3`/`Q4`.
+6. Rows expose raw cumulative `quarter`, `eps`, `gross_margin_pct`, `operating_margin_pct`, and `non_operating_pct`; the cache keeps full quarter keys such as `2026Q1`, while the UI displays `Q1`/`Q2`/`Q3`/`Q4`.
+7. When FinLab enrichment is enabled, rows also expose single-quarter fields such as `single_quarter_eps`, `single_quarter_gross_margin_pct`, `single_quarter_operating_margin_pct`, `single_quarter_non_operating_pct`, previous-quarter comparison fields, and `gross_margin_growth_pct`.
 7. Rows are split into `市場未反映` and `歷史公告` by the same market-close classifier.
 8. Original announcement text stays available through the same expandable-row pattern as the self-reported EPS tab.
 
@@ -85,7 +86,7 @@ Update API:
 
 - `POST /api/admin/update-financial-report`
 - Auth: same `Authorization: Bearer <TWSE_DASHBOARD_UPDATE_TOKEN>` contract.
-- Behavior: dynamically target the previous completed quarter, scan recent MOPS material-information query dates, parse financial report line items, merge/dedupe into the financial-report cache, and write lifecycle metadata.
+- Behavior: dynamically target the previous completed quarter, scan recent MOPS material-information query dates, parse financial report line items, merge/dedupe into the financial-report cache, enrich single-quarter metrics from FinLab when available, and write lifecycle metadata.
 - Optional query overrides: `target_quarter=2026Q1` and `lookback_days=7`.
 
 Primary cache:
@@ -93,6 +94,13 @@ Primary cache:
 - `TWSE_DASHBOARD_FINANCIAL_REPORT_CACHE_FILE`
 - Default: `/data/raw/financial_report_latest.json`
 - Metadata: `/data/raw/financial_report_latest_meta.json`
+
+FinLab line-item input cache:
+
+- `TWSE_DASHBOARD_FINLAB_FINANCIAL_REPORT_CACHE_FILE`
+- Default: `/data/raw/finlab_financial_report_inputs.pkl`
+- Uses `FINLAB_TOKEN` and `TWSE_DASHBOARD_FINLAB_CACHE_TTL_SECONDS`.
+- Q2 single-quarter values subtract FinLab Q1 from MOPS H1 cumulative values; Q3 subtracts FinLab Q1+Q2; Q4 subtracts FinLab Q1+Q2+Q3.
 - The metadata records `target_quarter`, `display_quarter`, `last_success_at`, `last_failed_at`, `last_error`, `query_dates`, `fetch_summaries`, `fetch_error_count`, `record_count`, `display_record_count`, `display_company_count`, `newest_announced_at`, and `newest_detected_at`.
 - `target_quarter` is the quarter the scheduler is trying to fetch. `display_quarter` is the quarter currently shown by the page, so it can remain on the prior quarter until newer-quarter rows are detected.
 
@@ -112,6 +120,8 @@ Primary cache:
 - `TWSE_DASHBOARD_FINANCIAL_REPORT_CACHE_FILE`: financial report cache path.
 - `TWSE_DASHBOARD_FINANCIAL_REPORT_TARGET_QUARTER`: optional override, e.g. `2026Q1`.
 - `TWSE_DASHBOARD_FINANCIAL_REPORT_LOOKBACK_DAYS`: MOPS query-date lookback for financial report updates. Default is `3`.
+- `TWSE_DASHBOARD_FINLAB_FINANCIAL_REPORT_CACHE_FILE`: FinLab financial-report line-item cache path.
+- `TWSE_DASHBOARD_FINANCIAL_REPORT_FINLAB_ENABLED`: set `0` to disable financial-report FinLab enrichment.
 - `TWSE_DASHBOARD_UPDATE_MIN_INTERVAL`: update cooldown seconds.
 - `TWSE_DASHBOARD_RECENT_DAYS`: self-reported EPS lookback window.
 - `TWSE_DASHBOARD_SEED_CACHE_ON_START`: set `0` to disable startup seed from bundled repo cache files.
@@ -124,6 +134,7 @@ Primary cache:
 | Self-reported/attention financial update API | Done | `/api/admin/update` merges realtime MOPS rows into active cache and updates metadata. |
 | Monthly revenue update API | Done | `/api/admin/update-monthly-revenue` updates newest target month with TWSE/TPEX fallbacks. |
 | Financial report update API | Done | `/api/admin/update-financial-report` scans MOPS material-information rows into active financial-report cache and updates metadata. |
+| Financial report FinLab enrichment | Done | Update endpoint writes single-quarter EPS/three-ratio metrics and previous-quarter comparison fields into the active financial-report cache when FinLab data is available. |
 | Monthly revenue newest-period display | Done | Page shows only the newest available revenue period. |
 | Trading-day market reaction split | Done | Uses FinMind trading calendar when available, weekday fallback otherwise. |
 | Sortable tables | Done | All three tab tables support local grouped sorting. |

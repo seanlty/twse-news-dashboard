@@ -24,6 +24,11 @@ from financial_report_crawler import (
     build_financial_report_record,
     dedupe_financial_report_records,
 )
+from financial_report_finlab import (
+    DEFAULT_FINLAB_CACHE_TTL_SECONDS as DEFAULT_FINANCIAL_REPORT_FINLAB_CACHE_TTL_SECONDS,
+    enrich_records_with_cached_finlab_financials,
+    env_finlab_token as env_financial_report_finlab_token,
+)
 from mops_crawler import (
     CATEGORY_CHOICES,
     CATEGORY_ALL,
@@ -80,6 +85,7 @@ DEFAULT_MONTHLY_REVENUE_META_PATH = DEFAULT_RAW_DATA_DIR / "monthly_revenue_late
 DEFAULT_FINLAB_EPS_CACHE_PATH = DEFAULT_RAW_DATA_DIR / "finlab_monthly_revenue_eps_inputs.pkl"
 DEFAULT_FINANCIAL_REPORT_OUTPUT_PATH = DEFAULT_RAW_DATA_DIR / "financial_report_latest.json"
 DEFAULT_FINANCIAL_REPORT_META_PATH = DEFAULT_RAW_DATA_DIR / "financial_report_latest_meta.json"
+DEFAULT_FINLAB_FINANCIAL_REPORT_CACHE_PATH = DEFAULT_RAW_DATA_DIR / "finlab_financial_report_inputs.pkl"
 DEFAULT_RECENT_DAYS = 7
 DEFAULT_FINANCIAL_REPORT_LOOKBACK_DAYS = 3
 MODE_LATEST = "latest"
@@ -112,6 +118,8 @@ MONTHLY_REVENUE_CACHE_FILE_ENV = "TWSE_DASHBOARD_MONTHLY_REVENUE_CACHE_FILE"
 FINANCIAL_REPORT_CACHE_FILE_ENV = "TWSE_DASHBOARD_FINANCIAL_REPORT_CACHE_FILE"
 FINANCIAL_REPORT_TARGET_QUARTER_ENV = "TWSE_DASHBOARD_FINANCIAL_REPORT_TARGET_QUARTER"
 FINANCIAL_REPORT_LOOKBACK_DAYS_ENV = "TWSE_DASHBOARD_FINANCIAL_REPORT_LOOKBACK_DAYS"
+FINANCIAL_REPORT_FINLAB_CACHE_FILE_ENV = "TWSE_DASHBOARD_FINLAB_FINANCIAL_REPORT_CACHE_FILE"
+FINANCIAL_REPORT_FINLAB_ENABLED_ENV = "TWSE_DASHBOARD_FINANCIAL_REPORT_FINLAB_ENABLED"
 FINMIND_TOKEN_ENV_NAMES = ("FINMIND_TOKEN", "FINMIND_API_TOKEN")
 FINMIND_DATA_API_URL = "https://api.finmindtrade.com/api/v4/data"
 FINMIND_TRADING_DATE_DATASET = "TaiwanStockTradingDate"
@@ -193,6 +201,10 @@ def default_financial_report_output_path() -> Path:
 
 def default_financial_report_meta_path() -> Path:
     return dashboard_cache_path("financial_report_latest_meta.json")
+
+
+def default_finlab_financial_report_cache_path() -> Path:
+    return dashboard_cache_path("finlab_financial_report_inputs.pkl")
 
 
 def env_first(names: tuple[str, ...]) -> str:
@@ -1693,10 +1705,44 @@ def financial_metric(record: dict[str, Any], key: str) -> Any:
     return value
 
 
+def financial_report_quarter_short(record: dict[str, Any]) -> str:
+    return format_financial_report_quarter(record.get("quarter", ""))
+
+
+def is_first_financial_report_quarter(record: dict[str, Any]) -> bool:
+    quarter_key = financial_report_record_quarter_key(record)
+    return quarter_key is not None and quarter_key[1] == 1
+
+
+def single_financial_metric(record: dict[str, Any], single_key: str, raw_key: str) -> Any:
+    value = record.get(single_key)
+    if value in (None, "") and is_first_financial_report_quarter(record):
+        value = financial_metric(record, raw_key)
+    return value
+
+
+def financial_gross_margin_growth(record: dict[str, Any]) -> Any:
+    value = record.get("gross_margin_growth_pct")
+    if value not in (None, ""):
+        return value
+    current = metric_float(
+        single_financial_metric(
+            record,
+            "single_quarter_gross_margin_pct",
+            "gross_margin_pct",
+        )
+    )
+    previous = metric_float(record.get("previous_quarter_gross_margin_pct"))
+    if current is None or previous is None:
+        return ""
+    return current - previous
+
+
 def render_financial_report_table(records: list[dict[str, Any]]) -> str:
     if not records:
         return render_empty_state("目前沒有財報資料。")
 
+    display_quarter_label = financial_report_quarter_short(records[0]) if records else "當季"
     cutoff_date, market_unreacted, historical = split_records_by_market_reaction(records)
     sections = [
         (
@@ -1710,19 +1756,20 @@ def render_financial_report_table(records: list[dict[str, Any]]) -> str:
     ]
     rows: list[str] = []
     detail_index = 0
+    column_count = 15
     for section_title, section_records in sections:
         rows.append(
             f"""
             <tr class="eps-group-row">
-              <td colspan="9">{html.escape(section_title)}</td>
+              <td colspan="{column_count}" data-section-label="{html.escape(section_title.rsplit('（', 1)[0], quote=True)}">{html.escape(section_title)}</td>
             </tr>
             """
         )
         if not section_records:
             rows.append(
-                """
+                f"""
                 <tr class="eps-empty-row">
-                  <td colspan="9">目前沒有符合條件的公告。</td>
+                  <td colspan="{column_count}">目前沒有符合條件的公告。</td>
                 </tr>
                 """
             )
@@ -1736,27 +1783,61 @@ def render_financial_report_table(records: list[dict[str, Any]]) -> str:
             source_label = str(record.get("source_label") or "")
             quarter = str(financial_metric(record, "quarter") or record.get("quarter") or "")
             quarter_label = format_financial_report_quarter(quarter)
-            eps = financial_metric(record, "eps")
-            gross_margin = financial_metric(record, "gross_margin_pct")
-            operating_margin = financial_metric(record, "operating_margin_pct")
-            non_operating = financial_metric(record, "non_operating_pct")
+            ytd_eps = financial_metric(record, "eps")
+            previous_eps = record.get("previous_quarter_eps")
+            single_eps = single_financial_metric(record, "single_quarter_eps", "eps")
+            previous_gross_margin = record.get("previous_quarter_gross_margin_pct")
+            single_gross_margin = single_financial_metric(
+                record,
+                "single_quarter_gross_margin_pct",
+                "gross_margin_pct",
+            )
+            gross_margin_growth = financial_gross_margin_growth(record)
+            previous_operating_margin = record.get("previous_quarter_operating_margin_pct")
+            single_operating_margin = single_financial_metric(
+                record,
+                "single_quarter_operating_margin_pct",
+                "operating_margin_pct",
+            )
+            previous_non_operating = record.get("previous_quarter_non_operating_pct")
+            single_non_operating = single_financial_metric(
+                record,
+                "single_quarter_non_operating_pct",
+                "non_operating_pct",
+            )
+            filter_attrs = "".join(
+                [
+                    numeric_data_attr("current-gross-margin", single_gross_margin),
+                    numeric_data_attr("previous-gross-margin", previous_gross_margin),
+                    numeric_data_attr("gross-margin-growth", gross_margin_growth),
+                    numeric_data_attr("current-eps", single_eps),
+                    numeric_data_attr("previous-eps", previous_eps),
+                    numeric_data_attr("non-operating-pct", single_non_operating),
+                ]
+            )
             rows.append(
                 f"""
-                <tr class="eps-data-row" data-detail-target="{detail_id}" tabindex="0" aria-expanded="false">
+                <tr class="eps-data-row" data-financial-filter-row data-detail-target="{detail_id}" tabindex="0" aria-expanded="false"{filter_attrs}>
                   <td class="time-cell" data-label="時間"{sort_value_attr(event_sort_value(record))}>{html.escape(format_event_table_time(record))}</td>
                   <td class="code-cell" data-label="代號"{sort_value_attr(record.get("company_id", ""))}>{html.escape(str(record.get("company_id", "")))}</td>
                   <td class="name-cell" data-label="名稱"{sort_value_attr(record.get("company_name", ""))}>{html.escape(str(record.get("company_name", "")))}</td>
                   <td class="metric-cell" data-label="季度"{sort_value_attr(quarter)}>{html.escape(quarter_label)}</td>
-                  <td class="metric-cell" data-label="EPS"{sort_value_attr(metric_sort_value(eps))}>{render_metric(eps)}</td>
-                  <td class="metric-cell" data-label="毛利率"{sort_value_attr(metric_sort_value(gross_margin))}>{render_percent_value(gross_margin)}</td>
-                  <td class="metric-cell" data-label="營益率"{sort_value_attr(metric_sort_value(operating_margin))}>{render_percent_value(operating_margin)}</td>
-                  <td class="metric-cell" data-label="業外%"{sort_value_attr(metric_sort_value(non_operating))}>{render_percent_value(non_operating)}</td>
+                  <td class="metric-cell" data-label="累計EPS"{sort_value_attr(metric_sort_value(ytd_eps))}>{render_fixed_metric(ytd_eps)}</td>
+                  <td class="metric-cell" data-label="前季EPS"{sort_value_attr(metric_sort_value(previous_eps))}>{render_fixed_metric(previous_eps)}</td>
+                  <td class="metric-cell primary-metric" data-label="{html.escape(display_quarter_label)} EPS"{sort_value_attr(metric_sort_value(single_eps))}>{render_fixed_metric(single_eps)}</td>
+                  <td class="metric-cell" data-label="前季毛利率"{sort_value_attr(metric_sort_value(previous_gross_margin))}>{render_percent_value(previous_gross_margin)}</td>
+                  <td class="metric-cell" data-label="{html.escape(display_quarter_label)}毛利率"{sort_value_attr(metric_sort_value(single_gross_margin))}>{render_percent_value(single_gross_margin)}</td>
+                  <td class="metric-cell" data-label="毛利率成長"{sort_value_attr(metric_sort_value(gross_margin_growth))}>{render_percent_value(gross_margin_growth)}</td>
+                  <td class="metric-cell" data-label="前季營益率"{sort_value_attr(metric_sort_value(previous_operating_margin))}>{render_percent_value(previous_operating_margin)}</td>
+                  <td class="metric-cell" data-label="{html.escape(display_quarter_label)}營益率"{sort_value_attr(metric_sort_value(single_operating_margin))}>{render_percent_value(single_operating_margin)}</td>
+                  <td class="metric-cell" data-label="前季業外%"{sort_value_attr(metric_sort_value(previous_non_operating))}>{render_percent_value(previous_non_operating)}</td>
+                  <td class="metric-cell" data-label="{html.escape(display_quarter_label)}業外%"{sort_value_attr(metric_sort_value(single_non_operating))}>{render_percent_value(single_non_operating)}</td>
                   <td class="detail-cell compact-detail-cell" data-label="原文"{sort_value_attr(title or description)}>
                     <button class="detail-toggle" type="button" aria-controls="{detail_id}" aria-expanded="false">詳細原文</button>
                   </td>
                 </tr>
                 <tr class="eps-detail-panel-row" id="{detail_id}" hidden>
-                  <td colspan="9">
+                  <td colspan="{column_count}">
                     <section class="detail-panel" aria-label="財報詳細原文">
                       <div class="detail-subject">{html.escape(title)}</div>
                       <div class="detail-meta-line">{html.escape(source_label or '-')} ｜ 時間：{html.escape(display_event_time(record))}</div>
@@ -1773,16 +1854,45 @@ def render_financial_report_table(records: list[dict[str, Any]]) -> str:
             ("代號", "text"),
             ("名稱", "text"),
             ("季度", "text"),
-            ("EPS", "number"),
-            ("毛利率", "number"),
-            ("營益率", "number"),
-            ("業外%", "number"),
+            ("累計EPS", "number"),
+            ("前季EPS", "number"),
+            (f"{display_quarter_label} EPS", "number"),
+            ("前季毛利率", "number"),
+            (f"{display_quarter_label}毛利率", "number"),
+            ("毛利率成長", "number"),
+            ("前季營益率", "number"),
+            (f"{display_quarter_label}營益率", "number"),
+            ("前季業外%", "number"),
+            (f"{display_quarter_label}業外%", "number"),
             ("原文", "text"),
         ]
     )
+    filter_bar = f"""
+    <div class="monthly-filter-bar financial-filter-bar" data-financial-filter-bar data-target-table="financial-report-table">
+      <label class="monthly-filter-field financial-filter-check">
+        <input type="checkbox" data-financial-filter-check="grossAbovePrevious">
+        <span>{html.escape(display_quarter_label)}毛利率 &gt; 前季</span>
+      </label>
+      <label class="monthly-filter-field financial-filter-check">
+        <input type="checkbox" data-financial-filter-check="epsAbovePrevious">
+        <span>{html.escape(display_quarter_label)} EPS &gt; 前季</span>
+      </label>
+      <label class="monthly-filter-field financial-filter-check">
+        <input type="checkbox" data-financial-filter-check="grossGrowthPositive">
+        <span>毛利率成長 &gt; 0</span>
+      </label>
+      <label class="monthly-filter-field">
+        <span>業外%</span>
+        <span class="financial-filter-static-operator" aria-label="業外百分比小於等於">&lt;=</span>
+        <input class="monthly-filter-input" type="number" inputmode="decimal" step="0.1" data-financial-filter="nonOperatingPct" aria-label="業外百分比小於等於多少">
+      </label>
+      <button class="monthly-filter-clear" type="button" data-financial-filter-clear>清除</button>
+    </div>
+    """
     return f"""
+    {filter_bar}
     <div class="eps-table-wrap">
-      <table class="eps-table financial-table" data-sortable-table>
+      <table class="eps-table financial-table" id="financial-report-table" data-sortable-table>
         <thead>
           <tr>
             {headers}
@@ -2181,6 +2291,25 @@ def render_dashboard(
       font-weight: 900;
       white-space: nowrap;
     }}
+    .financial-filter-check input {{
+      width: 13px;
+      height: 13px;
+      margin: 0;
+      accent-color: var(--accent);
+    }}
+    .financial-filter-static-operator {{
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 34px;
+      height: 28px;
+      border: 1px solid #334155;
+      border-radius: 5px;
+      color: #7bb7ff;
+      background: #151a2a;
+      font: inherit;
+      font-weight: 900;
+    }}
     .monthly-filter-operator {{
       width: 30px;
       height: 28px;
@@ -2468,12 +2597,12 @@ def render_dashboard(
       min-width: 1540px;
     }}
     .financial-table {{
-      min-width: 1320px;
+      min-width: 1880px;
     }}
     .monthly-table th:nth-child(11),
     .monthly-table td:nth-child(11),
-    .financial-table th:nth-child(9),
-    .financial-table td:nth-child(9) {{
+    .financial-table th:nth-child(15),
+    .financial-table td:nth-child(15) {{
       text-align: left;
     }}
     .subject-cell {{
@@ -2979,7 +3108,7 @@ def render_dashboard(
         min-width: 1480px;
       }}
       .financial-table {{
-        min-width: 1260px;
+        min-width: 1780px;
       }}
       .eps-table th,
       .eps-table td {{
@@ -3471,6 +3600,125 @@ def render_dashboard(
         }});
         applyMonthlyFilters();
       }});
+
+      const financialFilterBars = Array.from(document.querySelectorAll("[data-financial-filter-bar]"));
+      financialFilterBars.forEach((bar) => {{
+        const table = document.getElementById(bar.dataset.targetTable || "");
+        if (!table) {{
+          return;
+        }}
+
+        const checkboxes = Array.from(bar.querySelectorAll("[data-financial-filter-check]"));
+        const nonOperatingInput = bar.querySelector("[data-financial-filter='nonOperatingPct']");
+        const clearButton = bar.querySelector("[data-financial-filter-clear]");
+        const tbody = table.tBodies[0];
+
+        const checked = (key) => {{
+          return bar.querySelector(`[data-financial-filter-check="${{key}}"]`)?.checked || false;
+        }};
+
+        const hasActiveFilters = () => {{
+          return checkboxes.some((checkbox) => checkbox.checked)
+            || parseFilterNumber(nonOperatingInput?.value || "") !== null;
+        }};
+
+        const rowMatchesFilters = (row) => {{
+          const currentGrossMargin = parseFilterNumber(row.dataset.currentGrossMargin || "");
+          const previousGrossMargin = parseFilterNumber(row.dataset.previousGrossMargin || "");
+          const grossGrowth = parseFilterNumber(row.dataset.grossMarginGrowth || "");
+          const currentEps = parseFilterNumber(row.dataset.currentEps || "");
+          const previousEps = parseFilterNumber(row.dataset.previousEps || "");
+          const nonOperatingPct = parseFilterNumber(row.dataset.nonOperatingPct || "");
+
+          if (checked("grossAbovePrevious") && !(
+            currentGrossMargin !== null
+            && previousGrossMargin !== null
+            && currentGrossMargin > previousGrossMargin
+          )) {{
+            return false;
+          }}
+          if (checked("epsAbovePrevious") && !(
+            currentEps !== null
+            && previousEps !== null
+            && currentEps > previousEps
+          )) {{
+            return false;
+          }}
+          if (checked("grossGrowthPositive") && !(grossGrowth !== null && grossGrowth > 0)) {{
+            return false;
+          }}
+
+          const nonOperatingThreshold = parseFilterNumber(nonOperatingInput?.value || "");
+          if (nonOperatingThreshold !== null && !(
+            nonOperatingPct !== null
+            && nonOperatingPct <= nonOperatingThreshold
+          )) {{
+            return false;
+          }}
+          return true;
+        }};
+
+        const updateSectionCounts = () => {{
+          if (!tbody) {{
+            return;
+          }}
+          const active = hasActiveFilters();
+          let sectionCell = null;
+          let total = 0;
+          let visible = 0;
+
+          const flush = () => {{
+            if (!sectionCell) {{
+              return;
+            }}
+            const base = sectionCell.dataset.sectionLabel || sectionCell.textContent || "";
+            sectionCell.textContent = active
+              ? `${{base}}（${{visible}} / ${{total}} 筆）`
+              : `${{base}}（${{total}} 筆）`;
+          }};
+
+          Array.from(tbody.children).forEach((row) => {{
+            if (row.classList.contains("eps-group-row")) {{
+              flush();
+              sectionCell = row.cells[0] || null;
+              total = 0;
+              visible = 0;
+              return;
+            }}
+            if (!row.matches("[data-financial-filter-row]")) {{
+              return;
+            }}
+            total += 1;
+            if (!row.hidden) {{
+              visible += 1;
+            }}
+          }});
+          flush();
+        }};
+
+        const applyFinancialFilters = () => {{
+          const rows = Array.from(table.querySelectorAll("[data-financial-filter-row]"));
+          rows.forEach((row) => {{
+            row.hidden = !rowMatchesFilters(row);
+          }});
+          updateSectionCounts();
+        }};
+
+        checkboxes.forEach((checkbox) => {{
+          checkbox.addEventListener("change", applyFinancialFilters);
+        }});
+        nonOperatingInput?.addEventListener("input", applyFinancialFilters);
+        clearButton?.addEventListener("click", () => {{
+          checkboxes.forEach((checkbox) => {{
+            checkbox.checked = false;
+          }});
+          if (nonOperatingInput) {{
+            nonOperatingInput.value = "";
+          }}
+          applyFinancialFilters();
+        }});
+        applyFinancialFilters();
+      }});
     }})();
   </script>
 </body>
@@ -3507,6 +3755,9 @@ class DashboardServer:
         financial_report_output_path: Path = DEFAULT_FINANCIAL_REPORT_OUTPUT_PATH,
         financial_report_target_quarter: str | None = None,
         financial_report_lookback_days: int = DEFAULT_FINANCIAL_REPORT_LOOKBACK_DAYS,
+        financial_report_finlab_enabled: bool = True,
+        financial_report_finlab_cache_file: Path = DEFAULT_FINLAB_FINANCIAL_REPORT_CACHE_PATH,
+        financial_report_finlab_cache_ttl_seconds: int = DEFAULT_FINANCIAL_REPORT_FINLAB_CACHE_TTL_SECONDS,
     ) -> None:
         self.crawler = crawler
         self.monthly_revenue_crawler = monthly_revenue_crawler or MonthlyRevenueCrawler(
@@ -3539,6 +3790,9 @@ class DashboardServer:
         self.finlab_eps_cache_ttl_seconds = finlab_eps_cache_ttl_seconds
         self.financial_report_target_quarter = financial_report_target_quarter
         self.financial_report_lookback_days = financial_report_lookback_days
+        self.financial_report_finlab_enabled = financial_report_finlab_enabled
+        self.financial_report_finlab_cache_file = financial_report_finlab_cache_file
+        self.financial_report_finlab_cache_ttl_seconds = financial_report_finlab_cache_ttl_seconds
 
     def get_records(
         self,
@@ -3733,6 +3987,29 @@ class DashboardServer:
                 "error": f"{type(exc).__name__}: {exc}",
             }
 
+    def enrich_financial_report_finlab_metrics(
+        self,
+        records: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        if not self.financial_report_finlab_enabled:
+            return {"ok": True, "enabled": False, "enriched_count": 0}
+        try:
+            return enrich_records_with_cached_finlab_financials(
+                records,
+                cache_file=self.financial_report_finlab_cache_file,
+                token=env_financial_report_finlab_token(),
+                ttl_seconds=self.financial_report_finlab_cache_ttl_seconds,
+            )
+        except Exception as exc:  # pragma: no cover - defensive live update guard.
+            return {
+                "ok": False,
+                "enabled": True,
+                "enriched_count": 0,
+                "skipped_count": 0,
+                "skipped_reasons": {},
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+
     def _current_financial_report_target_quarter(self) -> str:
         return self.financial_report_target_quarter or default_financial_report_target_quarter()
 
@@ -3808,6 +4085,7 @@ class DashboardServer:
 
             merged_records = dedupe_financial_report_records([*latest_records, *existing_records])
             merged_records = sort_event_records(merged_records)
+            finlab_enrichment_result = self.enrich_financial_report_finlab_metrics(merged_records)
             save_records(merged_records, cache_file)
             meta = update_financial_report_cache_meta(
                 cache_file,
@@ -3826,6 +4104,7 @@ class DashboardServer:
                 before_count=before_count,
                 after_count=len(merged_records),
                 new_count=max(len(merged_records) - before_count, 0),
+                finlab_enrichment=finlab_enrichment_result,
             )
             self.cache_records[TAB_FINANCIAL_REPORT] = merged_records
             self.cache_records[f"{TAB_FINANCIAL_REPORT}:source"] = [
@@ -3855,6 +4134,7 @@ class DashboardServer:
                 "before_count": before_count,
                 "after_count": len(merged_records),
                 "new_count": max(len(merged_records) - before_count, 0),
+                "finlab_enrichment": finlab_enrichment_result,
                 "fetch_error_count": len(fetch_errors),
                 "fetch_errors": fetch_errors,
                 "updated_at": meta.get("last_success_at", ""),
@@ -4408,6 +4688,9 @@ def serve_command(args: argparse.Namespace) -> None:
         financial_report_output_path=args.financial_report_cache_file,
         financial_report_target_quarter=args.financial_report_target_quarter,
         financial_report_lookback_days=args.financial_report_lookback_days,
+        financial_report_finlab_enabled=not args.disable_financial_report_finlab,
+        financial_report_finlab_cache_file=args.financial_report_finlab_cache_file,
+        financial_report_finlab_cache_ttl_seconds=args.financial_report_finlab_cache_ttl_seconds,
     )
     server = ThreadingHTTPServer((args.host, args.port), build_handler(dashboard))
     print(f"Serving dashboard at http://{args.host}:{args.port}")
@@ -4549,6 +4832,27 @@ def build_parser() -> argparse.ArgumentParser:
         "--financial-report-cache-file",
         type=Path,
         default=env_path(FINANCIAL_REPORT_CACHE_FILE_ENV) or default_financial_report_output_path(),
+    )
+    serve.add_argument(
+        "--financial-report-finlab-cache-file",
+        type=Path,
+        default=env_path(FINANCIAL_REPORT_FINLAB_CACHE_FILE_ENV) or default_finlab_financial_report_cache_path(),
+        help="Persistent cache for FinLab financial-statement line items",
+    )
+    serve.add_argument(
+        "--financial-report-finlab-cache-ttl-seconds",
+        type=int,
+        default=env_int(
+            FINLAB_CACHE_TTL_SECONDS_ENV,
+            DEFAULT_FINANCIAL_REPORT_FINLAB_CACHE_TTL_SECONDS,
+        ),
+        help="How long to reuse FinLab financial-report input data before refreshing",
+    )
+    serve.add_argument(
+        "--disable-financial-report-finlab",
+        action="store_true",
+        default=not env_bool(FINANCIAL_REPORT_FINLAB_ENABLED_ENV, True),
+        help="Disable FinLab-backed single-quarter financial-report metrics",
     )
     serve.add_argument(
         "--financial-report-target-quarter",

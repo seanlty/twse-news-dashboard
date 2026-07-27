@@ -40,6 +40,8 @@ FINMIND_TOKEN=<secret-token>
 FINLAB_TOKEN=<secret-token>
 TWSE_DASHBOARD_FINLAB_CACHE_TTL_SECONDS=86400
 TWSE_DASHBOARD_FINLAB_CACHE_FILE=/data/raw/finlab_monthly_revenue_eps_inputs.pkl
+TWSE_DASHBOARD_FINLAB_FINANCIAL_REPORT_CACHE_FILE=/data/raw/finlab_financial_report_inputs.pkl
+TWSE_DASHBOARD_FINANCIAL_REPORT_FINLAB_ENABLED=1
 ```
 
 The `serve` command reads these environment variables as defaults:
@@ -88,6 +90,8 @@ For material-info/self-report data, the active cache is `/data/raw/material_info
 The metadata file records seed/update lifecycle fields such as `seeded_at`, `last_success_at`, `last_error`, `record_count`, and `newest_spoke_at`. The page header should describe source/update state from metadata, not infer freshness from the cache filename.
 
 For financial-report data, the active cache is `/data/raw/financial_report_latest.json` and the lifecycle metadata file is `/data/raw/financial_report_latest_meta.json`. The update endpoint is `POST /api/admin/update-financial-report`; it scans recent MOPS material-information query dates, parses `quarter`, `eps`, `gross_margin_pct`, `operating_margin_pct`, and `non_operating_pct`, then merges/dedupes rows into the active cache. The metadata separates `target_quarter` from `display_quarter`, so the page can keep showing the latest available completed quarter until a newer quarter is detected.
+
+When `FINLAB_TOKEN` is set, the financial-report update also enriches the active cache with single-quarter metrics using FinLab financial-statement line items. The FinLab input cache is `/data/raw/finlab_financial_report_inputs.pkl` by default and can be changed with `TWSE_DASHBOARD_FINLAB_FINANCIAL_REPORT_CACHE_FILE`. The calculation rolls by quarter: Q2 subtracts FinLab Q1 from the MOPS H1 cumulative values, Q3 subtracts FinLab Q1+Q2 from the MOPS Q3 cumulative values, and Q4 subtracts FinLab Q1+Q2+Q3. If FinLab is unavailable, the MOPS cache still updates and the enrichment status is recorded in financial-report metadata.
 
 Seed behavior can be disabled with:
 
@@ -152,6 +156,7 @@ Financial report scheduler direction:
 4. MOPS query dates can include rows from adjacent announcement dates, so the updater filters by actual `spoke_date_roc` and de-duplicates by company/date/time/quarter/subject.
 5. Manual backfills can pass `target_quarter=2026Q1&lookback_days=14` to the endpoint, but keep request frequency low when widening the lookback.
 6. If all query dates fail, the endpoint keeps the previous cache and records `last_failed_at` / `last_error` in `/data/raw/financial_report_latest_meta.json`.
+7. If FinLab enrichment succeeds, the endpoint writes single-quarter `EPS`, gross margin, operating margin, non-operating percentage, and previous-quarter comparison fields into `/data/raw/financial_report_latest.json`. If enrichment fails, the endpoint keeps the MOPS records and records the FinLab status in metadata.
 
 ## Cache before first deploy
 
@@ -173,5 +178,6 @@ The initial deployment seed should include:
 At runtime the material-info seed is copied/promoted into `/data/raw/material_info_range.json`; the original dated seed filename is not used as the long-lived active cache identity.
 Monthly revenue keeps `/data/raw/monthly_revenue_latest.json` as its long-lived active cache identity and stores lifecycle state in `/data/raw/monthly_revenue_latest_meta.json`.
 Financial report keeps `/data/raw/financial_report_latest.json` as its long-lived active cache identity and stores lifecycle state in `/data/raw/financial_report_latest_meta.json`.
+Financial-report FinLab line-item inputs are cached separately at `/data/raw/finlab_financial_report_inputs.pkl`.
 
 After Zeabur Volume is mounted at `/data`, these seed files should exist under `/data/raw` after first boot.

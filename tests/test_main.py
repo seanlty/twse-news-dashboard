@@ -320,6 +320,7 @@ def make_dashboard(
     financial_report_output_path: Path | None = None,
     financial_report_target_quarter: str | None = None,
     financial_report_lookback_days: int = 3,
+    financial_report_finlab_enabled: bool = False,
 ) -> DashboardServer:
     return DashboardServer(
         crawler=crawler or FakeCrawler(),
@@ -339,6 +340,7 @@ def make_dashboard(
         financial_report_output_path=financial_report_output_path or (Path("__missing_financial_report_cache__.json")),
         financial_report_target_quarter=financial_report_target_quarter,
         financial_report_lookback_days=financial_report_lookback_days,
+        financial_report_finlab_enabled=financial_report_finlab_enabled,
     )
 
 
@@ -716,6 +718,10 @@ def test_dashboard_cache_defaults_use_persistent_data_root(monkeypatch, tmp_path
         main_module.DEFAULT_FINANCIAL_REPORT_META_PATH.as_posix()
         == "/data/raw/financial_report_latest_meta.json"
     )
+    assert (
+        main_module.DEFAULT_FINLAB_FINANCIAL_REPORT_CACHE_PATH.as_posix()
+        == "/data/raw/finlab_financial_report_inputs.pkl"
+    )
 
     custom_root = tmp_path / "volume"
     monkeypatch.setenv(main_module.DATA_ROOT_ENV, str(custom_root))
@@ -738,6 +744,10 @@ def test_dashboard_cache_defaults_use_persistent_data_root(monkeypatch, tmp_path
     assert (
         main_module.default_financial_report_meta_path()
         == custom_root / "raw" / "financial_report_latest_meta.json"
+    )
+    assert (
+        main_module.default_finlab_financial_report_cache_path()
+        == custom_root / "raw" / "finlab_financial_report_inputs.pkl"
     )
 
 

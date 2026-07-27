@@ -22,6 +22,8 @@ TWSE_DASHBOARD_RANGE_CACHE_FILE=/data/raw/material_info_2026-06-01_2026-06-27_fi
 TWSE_DASHBOARD_MONTHLY_REVENUE_CACHE_FILE=/data/raw/monthly_revenue_latest.json
 TWSE_DASHBOARD_FINANCIAL_REPORT_CACHE_FILE=/data/raw/financial_report_latest.json
 TWSE_DASHBOARD_FINANCIAL_REPORT_LOOKBACK_DAYS=3
+TWSE_DASHBOARD_FINLAB_FINANCIAL_REPORT_CACHE_FILE=/data/raw/finlab_financial_report_inputs.pkl
+TWSE_DASHBOARD_FINANCIAL_REPORT_FINLAB_ENABLED=1
 TWSE_DASHBOARD_UPDATE_MIN_INTERVAL=300
 TWSE_DASHBOARD_UPDATE_TOKEN=<secret-token>
 TWSE_DASHBOARD_RECENT_DAYS=7
@@ -90,6 +92,7 @@ Runtime target files:
 - `/data/raw/material_info_2026-06-01_2026-06-27_financial_self_report.json`
 - `/data/raw/monthly_revenue_latest.json`
 - `/data/raw/financial_report_latest.json`
+- `/data/raw/finlab_financial_report_inputs.pkl` after the first successful FinLab financial-report enrichment
 
 The seed is intentionally one-way and non-destructive:
 
