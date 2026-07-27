@@ -2618,7 +2618,7 @@ def render_dashboard(
       min-width: 1540px;
     }}
     .financial-table {{
-      min-width: 1960px;
+      min-width: 1540px;
     }}
     .monthly-table th:nth-child(11),
     .monthly-table td:nth-child(11),
@@ -2631,13 +2631,13 @@ def render_dashboard(
     }}
     .financial-table .current-block-start,
     .financial-table .previous-block-start {{
-      border-left: 2px solid var(--accent-strong);
+      border-left: 2px solid #2a2a2a;
     }}
     .financial-table th.current-block-start .sort-button,
     .financial-table th.previous-block-start .sort-button,
     .financial-table td.current-block-start,
     .financial-table td.previous-block-start {{
-      padding-left: 10px;
+      padding-left: 7px;
     }}
     .financial-table .eps-metric-cell {{
       font-variant-numeric: tabular-nums;
@@ -3020,6 +3020,10 @@ def render_dashboard(
       padding: 6px 8px;
       border-bottom: 1px solid var(--line);
     }}
+    .financial-table th,
+    .financial-table td {{
+      padding: 5px 5px;
+    }}
     .eps-table th {{
       background: var(--panel);
       font-size: 12px;
@@ -3145,7 +3149,7 @@ def render_dashboard(
         min-width: 1480px;
       }}
       .financial-table {{
-        min-width: 1880px;
+        min-width: 1540px;
       }}
       .eps-table th,
       .eps-table td {{
@@ -3155,6 +3159,10 @@ def render_dashboard(
         text-align: right;
         vertical-align: top;
         white-space: nowrap;
+      }}
+      .financial-table th,
+      .financial-table td {{
+        padding: 5px 5px;
       }}
       .eps-group-row td {{
         border-radius: 0;
