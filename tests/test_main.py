@@ -953,6 +953,11 @@ def test_financial_report_tab_renders_financial_records(tmp_path: Path) -> None:
                 "event_time": "2026-05-14T17:30:33",
                 "detected_at": "2026-05-14T17:31:00+08:00",
                 "eps": 1.51,
+                "previous_quarter": "2025Q4",
+                "previous_quarter_eps": -0.33,
+                "previous_quarter_gross_margin_pct": 16.4,
+                "previous_quarter_operating_margin_pct": 11.2,
+                "previous_quarter_non_operating_pct": 3.1,
                 "gross_margin_pct": 17.93,
                 "operating_margin_pct": 13.23,
                 "non_operating_pct": -10.42,
@@ -983,6 +988,13 @@ def test_financial_report_tab_renders_financial_records(tmp_path: Path) -> None:
     assert "本公司董事會通過115年第一季合併財務報告" in html
     assert ">Q1</td>" in html
     assert "1.51" in html
+    assert 'data-label="上季"' in html
+    assert ">Q4</td>" in html
+    assert '<span class="finance-up">1.51</span>' in html
+    assert '<span class="finance-down">-0.33</span>' in html
+    assert "current-block-start" in html
+    assert "previous-block-start" in html
+    assert html.index("Q1 EPS") < html.index("上季") < html.index("前季EPS")
     assert "17.93%" in html
     assert "13.23%" in html
     assert "-10.42%" in html

@@ -300,6 +300,16 @@ def render_fixed_metric(value: Any, digits: int = 2) -> str:
     return html.escape(f"{number:.{digits}f}")
 
 
+def render_signed_fixed_metric(value: Any, digits: int = 2) -> str:
+    number = metric_float(value)
+    if number is None:
+        if value in (None, ""):
+            return '<span class="muted-value">-</span>'
+        return render_metric(value)
+    class_name = "finance-up" if number > 0 else "finance-down" if number < 0 else "muted-value"
+    return f'<span class="{class_name}">{html.escape(f"{number:.{digits}f}")}</span>'
+
+
 def metric_float(value: Any) -> float | None:
     if value in (None, ""):
         return None
@@ -344,9 +354,10 @@ def numeric_data_attr(name: str, value: Any, divisor: float = 1.0) -> str:
     return f' data-{name}="{html.escape(normalized, quote=True)}"'
 
 
-def sortable_header(label: str, sort_type: str = "text") -> str:
+def sortable_header(label: str, sort_type: str = "text", class_name: str = "") -> str:
+    class_attr = f' class="{html.escape(class_name, quote=True)}"' if class_name else ""
     return (
-        '<th scope="col" aria-sort="none">'
+        f'<th scope="col" aria-sort="none"{class_attr}>'
         f'<button class="sort-button" type="button" data-sort-type="{html.escape(sort_type, quote=True)}">'
         f'<span>{html.escape(label)}</span><span class="sort-indicator" aria-hidden="true"></span>'
         "</button>"
@@ -354,8 +365,14 @@ def sortable_header(label: str, sort_type: str = "text") -> str:
     )
 
 
-def render_sortable_headers(columns: list[tuple[str, str]]) -> str:
-    return "\n".join(sortable_header(label, sort_type) for label, sort_type in columns)
+def render_sortable_headers(columns: list[tuple[str, str] | tuple[str, str, str]]) -> str:
+    headers = []
+    for column in columns:
+        label = column[0]
+        sort_type = column[1]
+        class_name = column[2] if len(column) > 2 else ""
+        headers.append(sortable_header(label, sort_type, class_name))
+    return "\n".join(headers)
 
 
 def record_text(record: dict[str, Any]) -> str:
@@ -1756,7 +1773,7 @@ def render_financial_report_table(records: list[dict[str, Any]]) -> str:
     ]
     rows: list[str] = []
     detail_index = 0
-    column_count = 15
+    column_count = 16
     for section_title, section_records in sections:
         rows.append(
             f"""
@@ -1784,6 +1801,8 @@ def render_financial_report_table(records: list[dict[str, Any]]) -> str:
             quarter = str(financial_metric(record, "quarter") or record.get("quarter") or "")
             quarter_label = format_financial_report_quarter(quarter)
             ytd_eps = financial_metric(record, "eps")
+            previous_quarter = str(record.get("previous_quarter") or "")
+            previous_quarter_label = format_financial_report_quarter(previous_quarter) if previous_quarter else ""
             previous_eps = record.get("previous_quarter_eps")
             single_eps = single_financial_metric(record, "single_quarter_eps", "eps")
             previous_gross_margin = record.get("previous_quarter_gross_margin_pct")
@@ -1821,17 +1840,18 @@ def render_financial_report_table(records: list[dict[str, Any]]) -> str:
                   <td class="time-cell" data-label="時間"{sort_value_attr(event_sort_value(record))}>{html.escape(format_event_table_time(record))}</td>
                   <td class="code-cell" data-label="代號"{sort_value_attr(record.get("company_id", ""))}>{html.escape(str(record.get("company_id", "")))}</td>
                   <td class="name-cell" data-label="名稱"{sort_value_attr(record.get("company_name", ""))}>{html.escape(str(record.get("company_name", "")))}</td>
-                  <td class="metric-cell" data-label="季度"{sort_value_attr(quarter)}>{html.escape(quarter_label)}</td>
-                  <td class="metric-cell" data-label="累計EPS"{sort_value_attr(metric_sort_value(ytd_eps))}>{render_fixed_metric(ytd_eps)}</td>
-                  <td class="metric-cell" data-label="前季EPS"{sort_value_attr(metric_sort_value(previous_eps))}>{render_fixed_metric(previous_eps)}</td>
-                  <td class="metric-cell primary-metric" data-label="{html.escape(display_quarter_label)} EPS"{sort_value_attr(metric_sort_value(single_eps))}>{render_fixed_metric(single_eps)}</td>
-                  <td class="metric-cell" data-label="前季毛利率"{sort_value_attr(metric_sort_value(previous_gross_margin))}>{render_percent_value(previous_gross_margin)}</td>
+                  <td class="metric-cell current-block-start" data-label="季度"{sort_value_attr(quarter)}>{html.escape(quarter_label)}</td>
+                  <td class="metric-cell primary-metric eps-metric-cell" data-label="{html.escape(display_quarter_label)} EPS"{sort_value_attr(metric_sort_value(single_eps))}>{render_signed_fixed_metric(single_eps)}</td>
                   <td class="metric-cell" data-label="{html.escape(display_quarter_label)}毛利率"{sort_value_attr(metric_sort_value(single_gross_margin))}>{render_percent_value(single_gross_margin)}</td>
-                  <td class="metric-cell" data-label="毛利率成長"{sort_value_attr(metric_sort_value(gross_margin_growth))}>{render_percent_value(gross_margin_growth)}</td>
-                  <td class="metric-cell" data-label="前季營益率"{sort_value_attr(metric_sort_value(previous_operating_margin))}>{render_percent_value(previous_operating_margin)}</td>
                   <td class="metric-cell" data-label="{html.escape(display_quarter_label)}營益率"{sort_value_attr(metric_sort_value(single_operating_margin))}>{render_percent_value(single_operating_margin)}</td>
-                  <td class="metric-cell" data-label="前季業外%"{sort_value_attr(metric_sort_value(previous_non_operating))}>{render_percent_value(previous_non_operating)}</td>
                   <td class="metric-cell" data-label="{html.escape(display_quarter_label)}業外%"{sort_value_attr(metric_sort_value(single_non_operating))}>{render_percent_value(single_non_operating)}</td>
+                  <td class="metric-cell" data-label="毛利率成長"{sort_value_attr(metric_sort_value(gross_margin_growth))}>{render_percent_value(gross_margin_growth)}</td>
+                  <td class="metric-cell eps-metric-cell" data-label="累計EPS"{sort_value_attr(metric_sort_value(ytd_eps))}>{render_signed_fixed_metric(ytd_eps)}</td>
+                  <td class="metric-cell previous-block-start" data-label="上季"{sort_value_attr(previous_quarter)}>{render_metric(previous_quarter_label)}</td>
+                  <td class="metric-cell eps-metric-cell" data-label="前季EPS"{sort_value_attr(metric_sort_value(previous_eps))}>{render_signed_fixed_metric(previous_eps)}</td>
+                  <td class="metric-cell" data-label="前季毛利率"{sort_value_attr(metric_sort_value(previous_gross_margin))}>{render_percent_value(previous_gross_margin)}</td>
+                  <td class="metric-cell" data-label="前季營益率"{sort_value_attr(metric_sort_value(previous_operating_margin))}>{render_percent_value(previous_operating_margin)}</td>
+                  <td class="metric-cell" data-label="前季業外%"{sort_value_attr(metric_sort_value(previous_non_operating))}>{render_percent_value(previous_non_operating)}</td>
                   <td class="detail-cell compact-detail-cell" data-label="原文"{sort_value_attr(title or description)}>
                     <button class="detail-toggle" type="button" aria-controls="{detail_id}" aria-expanded="false">詳細原文</button>
                   </td>
@@ -1853,17 +1873,18 @@ def render_financial_report_table(records: list[dict[str, Any]]) -> str:
             ("時間", "time"),
             ("代號", "text"),
             ("名稱", "text"),
-            ("季度", "text"),
-            ("累計EPS", "number"),
-            ("前季EPS", "number"),
+            ("季度", "text", "current-block-start"),
             (f"{display_quarter_label} EPS", "number"),
-            ("前季毛利率", "number"),
             (f"{display_quarter_label}毛利率", "number"),
-            ("毛利率成長", "number"),
-            ("前季營益率", "number"),
             (f"{display_quarter_label}營益率", "number"),
-            ("前季業外%", "number"),
             (f"{display_quarter_label}業外%", "number"),
+            ("毛利率成長", "number"),
+            ("累計EPS", "number"),
+            ("上季", "text", "previous-block-start"),
+            ("前季EPS", "number"),
+            ("前季毛利率", "number"),
+            ("前季營益率", "number"),
+            ("前季業外%", "number"),
             ("原文", "text"),
         ]
     )
@@ -2597,13 +2618,29 @@ def render_dashboard(
       min-width: 1540px;
     }}
     .financial-table {{
-      min-width: 1880px;
+      min-width: 1960px;
     }}
     .monthly-table th:nth-child(11),
     .monthly-table td:nth-child(11),
-    .financial-table th:nth-child(15),
-    .financial-table td:nth-child(15) {{
+    .financial-table th:nth-child(16),
+    .financial-table td:nth-child(16) {{
       text-align: left;
+    }}
+    .financial-table .primary-metric {{
+      border-left: 0;
+    }}
+    .financial-table .current-block-start,
+    .financial-table .previous-block-start {{
+      border-left: 2px solid var(--accent-strong);
+    }}
+    .financial-table th.current-block-start .sort-button,
+    .financial-table th.previous-block-start .sort-button,
+    .financial-table td.current-block-start,
+    .financial-table td.previous-block-start {{
+      padding-left: 10px;
+    }}
+    .financial-table .eps-metric-cell {{
+      font-variant-numeric: tabular-nums;
     }}
     .subject-cell {{
       min-width: 260px;
@@ -3108,7 +3145,7 @@ def render_dashboard(
         min-width: 1480px;
       }}
       .financial-table {{
-        min-width: 1780px;
+        min-width: 1880px;
       }}
       .eps-table th,
       .eps-table td {{
@@ -3128,6 +3165,9 @@ def render_dashboard(
       }}
       .primary-metric {{
         border-left: 1px solid var(--line);
+      }}
+      .financial-table .primary-metric {{
+        border-left: 0;
       }}
       .subject-cell,
       .note-cell,
