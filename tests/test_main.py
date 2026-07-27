@@ -998,6 +998,10 @@ def test_financial_report_tab_renders_financial_records(tmp_path: Path) -> None:
     assert "17.93%" in html
     assert "13.23%" in html
     assert "-10.42%" in html
+    assert "毛利率成長率%" in html
+    assert "9.33%" in html
+    assert 'data-financial-filter="grossMarginGrowthPct"' in html
+    assert "grossGrowthPositive" not in html
     assert "top-info-card" not in html
     assert "panel-info-card" not in html
     assert "panel-title-line" in html

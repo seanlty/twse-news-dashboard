@@ -1738,10 +1738,15 @@ def single_financial_metric(record: dict[str, Any], single_key: str, raw_key: st
     return value
 
 
+def gross_margin_growth_rate_pct(current: Any, previous: Any) -> float | None:
+    current_value = metric_float(current)
+    previous_value = metric_float(previous)
+    if current_value is None or previous_value in (None, 0):
+        return None
+    return (current_value - previous_value) / abs(previous_value) * 100
+
+
 def financial_gross_margin_growth(record: dict[str, Any]) -> Any:
-    value = record.get("gross_margin_growth_pct")
-    if value not in (None, ""):
-        return value
     current = metric_float(
         single_financial_metric(
             record,
@@ -1750,9 +1755,8 @@ def financial_gross_margin_growth(record: dict[str, Any]) -> Any:
         )
     )
     previous = metric_float(record.get("previous_quarter_gross_margin_pct"))
-    if current is None or previous is None:
-        return ""
-    return current - previous
+    computed = gross_margin_growth_rate_pct(current, previous)
+    return "" if computed is None else computed
 
 
 def render_financial_report_table(records: list[dict[str, Any]]) -> str:
@@ -1845,7 +1849,7 @@ def render_financial_report_table(records: list[dict[str, Any]]) -> str:
                   <td class="metric-cell" data-label="{html.escape(display_quarter_label)}毛利率"{sort_value_attr(metric_sort_value(single_gross_margin))}>{render_percent_value(single_gross_margin)}</td>
                   <td class="metric-cell" data-label="{html.escape(display_quarter_label)}營益率"{sort_value_attr(metric_sort_value(single_operating_margin))}>{render_percent_value(single_operating_margin)}</td>
                   <td class="metric-cell" data-label="{html.escape(display_quarter_label)}業外%"{sort_value_attr(metric_sort_value(single_non_operating))}>{render_percent_value(single_non_operating)}</td>
-                  <td class="metric-cell" data-label="毛利率成長"{sort_value_attr(metric_sort_value(gross_margin_growth))}>{render_percent_value(gross_margin_growth)}</td>
+                  <td class="metric-cell" data-label="毛利率成長率%"{sort_value_attr(metric_sort_value(gross_margin_growth))}>{render_percent_value(gross_margin_growth)}</td>
                   <td class="metric-cell eps-metric-cell" data-label="累計EPS"{sort_value_attr(metric_sort_value(ytd_eps))}>{render_signed_fixed_metric(ytd_eps)}</td>
                   <td class="metric-cell previous-block-start" data-label="上季"{sort_value_attr(previous_quarter)}>{render_metric(previous_quarter_label)}</td>
                   <td class="metric-cell eps-metric-cell" data-label="前季EPS"{sort_value_attr(metric_sort_value(previous_eps))}>{render_signed_fixed_metric(previous_eps)}</td>
@@ -1878,7 +1882,7 @@ def render_financial_report_table(records: list[dict[str, Any]]) -> str:
             (f"{display_quarter_label}毛利率", "number"),
             (f"{display_quarter_label}營益率", "number"),
             (f"{display_quarter_label}業外%", "number"),
-            ("毛利率成長", "number"),
+            ("毛利率成長率%", "number"),
             ("累計EPS", "number"),
             ("上季", "text", "previous-block-start"),
             ("前季EPS", "number"),
@@ -1898,9 +1902,10 @@ def render_financial_report_table(records: list[dict[str, Any]]) -> str:
         <input type="checkbox" data-financial-filter-check="epsAbovePrevious">
         <span>{html.escape(display_quarter_label)} EPS &gt; 前季</span>
       </label>
-      <label class="monthly-filter-field financial-filter-check">
-        <input type="checkbox" data-financial-filter-check="grossGrowthPositive">
-        <span>毛利率成長 &gt; 0</span>
+      <label class="monthly-filter-field">
+        <span>毛利率成長率%</span>
+        <span class="financial-filter-static-operator" aria-label="毛利率成長率百分比大於等於">&gt;=</span>
+        <input class="monthly-filter-input" type="number" inputmode="decimal" step="0.1" data-financial-filter="grossMarginGrowthPct" aria-label="毛利率成長率百分比大於等於多少">
       </label>
       <label class="monthly-filter-field">
         <span>業外%</span>
@@ -2626,6 +2631,14 @@ def render_dashboard(
     .financial-table td:nth-child(16) {{
       text-align: left;
     }}
+    .financial-table th:nth-child(16),
+    .financial-table td:nth-child(16) {{
+      width: 82px;
+      min-width: 82px;
+      max-width: 82px;
+      padding-left: 5px;
+      padding-right: 2px;
+    }}
     .financial-table .primary-metric {{
       border-left: 0;
     }}
@@ -2641,6 +2654,19 @@ def render_dashboard(
     }}
     .financial-table .eps-metric-cell {{
       font-variant-numeric: tabular-nums;
+    }}
+    .financial-table .compact-detail-cell {{
+      width: 82px;
+      min-width: 0;
+      max-width: 82px;
+      white-space: nowrap;
+    }}
+    .financial-table .compact-detail-cell .detail-toggle {{
+      display: inline-flex;
+      justify-content: flex-start;
+      width: auto;
+      min-width: 0;
+      padding: 3px 5px;
     }}
     .subject-cell {{
       min-width: 260px;
@@ -3657,6 +3683,7 @@ def render_dashboard(
         }}
 
         const checkboxes = Array.from(bar.querySelectorAll("[data-financial-filter-check]"));
+        const grossMarginGrowthInput = bar.querySelector("[data-financial-filter='grossMarginGrowthPct']");
         const nonOperatingInput = bar.querySelector("[data-financial-filter='nonOperatingPct']");
         const clearButton = bar.querySelector("[data-financial-filter-clear]");
         const tbody = table.tBodies[0];
@@ -3667,6 +3694,7 @@ def render_dashboard(
 
         const hasActiveFilters = () => {{
           return checkboxes.some((checkbox) => checkbox.checked)
+            || parseFilterNumber(grossMarginGrowthInput?.value || "") !== null
             || parseFilterNumber(nonOperatingInput?.value || "") !== null;
         }};
 
@@ -3692,7 +3720,11 @@ def render_dashboard(
           )) {{
             return false;
           }}
-          if (checked("grossGrowthPositive") && !(grossGrowth !== null && grossGrowth > 0)) {{
+          const grossMarginGrowthThreshold = parseFilterNumber(grossMarginGrowthInput?.value || "");
+          if (grossMarginGrowthThreshold !== null && !(
+            grossGrowth !== null
+            && grossGrowth >= grossMarginGrowthThreshold
+          )) {{
             return false;
           }}
 
@@ -3755,6 +3787,7 @@ def render_dashboard(
         checkboxes.forEach((checkbox) => {{
           checkbox.addEventListener("change", applyFinancialFilters);
         }});
+        grossMarginGrowthInput?.addEventListener("input", applyFinancialFilters);
         nonOperatingInput?.addEventListener("input", applyFinancialFilters);
         clearButton?.addEventListener("click", () => {{
           checkboxes.forEach((checkbox) => {{
@@ -3762,6 +3795,9 @@ def render_dashboard(
           }});
           if (nonOperatingInput) {{
             nonOperatingInput.value = "";
+          }}
+          if (grossMarginGrowthInput) {{
+            grossMarginGrowthInput.value = "";
           }}
           applyFinancialFilters();
         }});

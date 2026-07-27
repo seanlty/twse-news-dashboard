@@ -51,7 +51,7 @@ def test_financial_report_single_quarter_enrichment_for_q2() -> None:
     assert records[0]["single_quarter_eps"] == 2.5
     assert records[0]["previous_quarter_gross_margin_pct"] == 40.0
     assert records[0]["single_quarter_gross_margin_pct"] == 55.0
-    assert records[0]["gross_margin_growth_pct"] == 15.0
+    assert records[0]["gross_margin_growth_pct"] == 37.5
     assert records[0]["single_quarter_operating_margin_pct"] == 30.0
     assert records[0]["single_quarter_non_operating_pct"] == 20.0
 
@@ -83,6 +83,6 @@ def test_financial_report_single_quarter_enrichment_for_q3_rolls_prior_ytd() -> 
     assert records[0]["single_quarter_eps"] == 3.5
     assert records[0]["previous_quarter_gross_margin_pct"] == 55.0
     assert records[0]["single_quarter_gross_margin_pct"] == 50.0
-    assert records[0]["gross_margin_growth_pct"] == -5.0
+    assert records[0]["gross_margin_growth_pct"] == -9.0909
     assert records[0]["single_quarter_operating_margin_pct"] == 32.5
     assert records[0]["single_quarter_non_operating_pct"] == 27.78

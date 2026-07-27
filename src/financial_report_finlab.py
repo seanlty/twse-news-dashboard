@@ -75,6 +75,12 @@ def ratio_pct(numerator: float | None, denominator: float | None) -> float | Non
     return numerator / denominator * 100
 
 
+def growth_rate_pct(current: float | None, previous: float | None) -> float | None:
+    if current is None or previous in (None, 0):
+        return None
+    return (current - previous) / abs(previous) * 100
+
+
 def normalize_quarter(value: Any) -> str:
     text = str(value or "").strip().upper().replace("-", "")
     if len(text) != 6 or not text[:4].isdigit() or text[4] != "Q" or text[5] not in "1234":
@@ -352,11 +358,7 @@ def calculate_record_enrichment(
     previous_gross_margin = ratio_pct(previous_gross, previous_revenue)
     previous_operating_margin = ratio_pct(previous_operating, previous_revenue)
     previous_non_operating_pct = ratio_pct(previous_non_operating, previous_pretax)
-    gross_margin_growth = (
-        None
-        if single_gross_margin is None or previous_gross_margin is None
-        else single_gross_margin - previous_gross_margin
-    )
+    gross_margin_growth = growth_rate_pct(single_gross_margin, previous_gross_margin)
 
     enrichment = {
         "previous_quarter": previous_quarter,

@@ -78,9 +78,9 @@ Current display flow:
 4. Before the target quarter appears, the newest available prior quarter remains visible.
 5. After any target-quarter row appears, only that target quarter is displayed.
 6. Rows expose raw cumulative `quarter`, `eps`, `gross_margin_pct`, `operating_margin_pct`, and `non_operating_pct`; the cache keeps full quarter keys such as `2026Q1`, while the UI displays `Q1`/`Q2`/`Q3`/`Q4`.
-7. When FinLab enrichment is enabled, rows also expose single-quarter fields such as `single_quarter_eps`, `single_quarter_gross_margin_pct`, `single_quarter_operating_margin_pct`, `single_quarter_non_operating_pct`, previous-quarter comparison fields, and `gross_margin_growth_pct`.
-7. Rows are split into `市場未反映` and `歷史公告` by the same market-close classifier.
-8. Original announcement text stays available through the same expandable-row pattern as the self-reported EPS tab.
+7. When FinLab enrichment is enabled, rows also expose single-quarter fields such as `single_quarter_eps`, `single_quarter_gross_margin_pct`, `single_quarter_operating_margin_pct`, `single_quarter_non_operating_pct`, previous-quarter comparison fields, and `gross_margin_growth_pct`. `gross_margin_growth_pct` is the gross-margin growth rate: `(current gross margin - previous gross margin) / abs(previous gross margin) * 100`.
+8. Rows are split into `市場未反映` and `歷史公告` by the same market-close classifier.
+9. Original announcement text stays available through the same expandable-row pattern as the self-reported EPS tab.
 
 Update API:
 
