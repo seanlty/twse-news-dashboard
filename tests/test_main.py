@@ -999,6 +999,10 @@ def test_financial_report_tab_renders_financial_records(tmp_path: Path) -> None:
     assert "current-block-start" in html
     assert "previous-block-start" in html
     assert html.index("Q1 EPS") < html.index("上季") < html.index("前季EPS")
+    assert "EPS成長率%" in html
+    assert "557.58%" in html
+    assert 'data-financial-filter="epsGrowthPct"' in html
+    assert 'data-eps-growth="' in html
     assert "17.93%" in html
     assert "13.23%" in html
     assert "-10.42%" in html

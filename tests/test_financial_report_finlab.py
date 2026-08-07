@@ -49,6 +49,7 @@ def test_financial_report_single_quarter_enrichment_for_q2() -> None:
     assert records[0]["prior_ytd_finlab_quarters"] == ["2026-Q1"]
     assert records[0]["previous_quarter_eps"] == 1.0
     assert records[0]["single_quarter_eps"] == 2.5
+    assert records[0]["eps_growth_pct"] == 150.0
     assert records[0]["previous_quarter_gross_margin_pct"] == 40.0
     assert records[0]["single_quarter_gross_margin_pct"] == 55.0
     assert records[0]["gross_margin_growth_pct"] == 37.5
@@ -81,6 +82,7 @@ def test_financial_report_single_quarter_enrichment_for_q3_rolls_prior_ytd() -> 
     assert records[0]["prior_ytd_finlab_quarters"] == ["2026-Q1", "2026-Q2"]
     assert records[0]["previous_quarter_eps"] == 2.5
     assert records[0]["single_quarter_eps"] == 3.5
+    assert records[0]["eps_growth_pct"] == 40.0
     assert records[0]["previous_quarter_gross_margin_pct"] == 55.0
     assert records[0]["single_quarter_gross_margin_pct"] == 50.0
     assert records[0]["gross_margin_growth_pct"] == -9.0909

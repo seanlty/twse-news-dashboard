@@ -31,6 +31,7 @@ FINANCIAL_REPORT_ENRICHMENT_FIELD_NAMES = (
     "previous_quarter_operating_margin_pct",
     "previous_quarter_non_operating_pct",
     "single_quarter_eps",
+    "eps_growth_pct",
     "single_quarter_gross_margin_pct",
     "single_quarter_operating_margin_pct",
     "single_quarter_non_operating_pct",
@@ -358,6 +359,7 @@ def calculate_record_enrichment(
     previous_gross_margin = ratio_pct(previous_gross, previous_revenue)
     previous_operating_margin = ratio_pct(previous_operating, previous_revenue)
     previous_non_operating_pct = ratio_pct(previous_non_operating, previous_pretax)
+    eps_growth = growth_rate_pct(single_eps, previous_eps)
     gross_margin_growth = growth_rate_pct(single_gross_margin, previous_gross_margin)
 
     enrichment = {
@@ -369,6 +371,7 @@ def calculate_record_enrichment(
         "previous_quarter_operating_margin_pct": rounded(previous_operating_margin, 2),
         "previous_quarter_non_operating_pct": rounded(previous_non_operating_pct, 2),
         "single_quarter_eps": rounded(single_eps, 3),
+        "eps_growth_pct": rounded(eps_growth, 4),
         "single_quarter_gross_margin_pct": rounded(single_gross_margin, 2),
         "single_quarter_operating_margin_pct": rounded(single_operating_margin, 2),
         "single_quarter_non_operating_pct": rounded(single_non_operating_pct, 2),
