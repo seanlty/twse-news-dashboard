@@ -372,6 +372,33 @@ def test_filter_records_for_recent_financial_includes_attention_eps_and_self_pro
         ),
         classify_record(
             {
+                "company_id": "3036",
+                "subject": "本公司115年7月份自結合併營收約新台幣1,830億元",
+                "detail": {
+                    "description": "115年7月份自結合併營收約新台幣1,830億元",
+                },
+            }
+        ),
+        classify_record(
+            {
+                "company_id": "6015",
+                "subject": "公告本公司自行結算一一五年七月份合併損益",
+                "detail": {
+                    "description": "合併營業損益 12,300\n合併稅前損益 14,200",
+                },
+            }
+        ),
+        classify_record(
+            {
+                "company_id": "2542",
+                "subject": "公告本公司董事會通過115年第2季合併財務報告",
+                "detail": {
+                    "description": "1月1日累計至本期止\n基本每股盈餘 1.23",
+                },
+            }
+        ),
+        classify_record(
+            {
                 "company_id": "8444",
                 "subject": "公告本公司115年5月自結合併財務報告之負債比率、流動比率及速動比率",
                 "detail": {
@@ -383,13 +410,18 @@ def test_filter_records_for_recent_financial_includes_attention_eps_and_self_pro
 
     filtered = filter_records_for_recent_financial(records)
 
-    assert [record["company_id"] for record in filtered] == ["2017", "4716", "1529"]
+    assert [record["company_id"] for record in filtered] == ["2017", "4716", "1529", "3036", "6015"]
     assert records[0]["financial_signal_kind"] == "self_report_eps"
     assert records[1]["financial_signal_kind"] == "attention_financial_eps"
     assert records[1]["is_attention_financial_eps"] is True
     assert records[2]["financial_signal_kind"] == "self_profit_without_eps"
     assert records[2]["is_self_profit_without_eps"] is True
-    assert records[3]["financial_signal_kind"] == ""
+    assert records[3]["financial_signal_kind"] == "monthly_self_revenue"
+    assert records[3]["is_monthly_self_revenue"] is True
+    assert records[4]["financial_signal_kind"] == "self_profit_without_eps"
+    assert records[5]["financial_signal_kind"] == ""
+    assert records[5]["is_formal_financial_report"] is True
+    assert records[6]["financial_signal_kind"] == ""
 
 
 def test_filter_records_by_company_id_matches_stock_code() -> None:

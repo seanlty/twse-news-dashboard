@@ -39,6 +39,29 @@ MONTH_PERIOD_PATTERNS = (
     re.compile(r"\(\s*\d{3}\s*/\s*0?(\d{1,2})\s*\)"),
 )
 QUARTER_PERIOD_PATTERN = re.compile(r"\d{3}\s*年?\s*第\s*(\d)\s*季")
+MONTH_TEXT_TOKEN = r"(?:0?[1-9]|1[0-2]|十一|十二|十|[一二三四五六七八九])"
+YEAR_TEXT_TOKEN = r"(?:\d{2,4}|[一二三四五六七八九零〇Ｏ○]{2,4})"
+MONTHLY_DISCLOSURE_SUBJECT_PATTERN = re.compile(
+    rf"(?:{YEAR_TEXT_TOKEN}年(?:度)?)?{MONTH_TEXT_TOKEN}月(?:份)?(?![0-3]?\d日)"
+)
+FORMAL_FINANCIAL_REPORT_PATTERNS = (
+    re.compile(
+        r"(?:董事會通過|董事會決議通過|提報董事會|業經提報董事會|審計委員會通過|提報審計委員會)"
+        r".{0,20}(?:財務報告|財務報表|財報)"
+    ),
+    re.compile(
+        r"(?:財務報告|財務報表|財報)"
+        r".{0,20}(?:董事會通過|董事會決議通過|提報董事會|業經提報董事會|審計委員會通過|提報審計委員會)"
+    ),
+    re.compile(
+        rf"{YEAR_TEXT_TOKEN}年(?:度)?第(?:[1-4一二三四])季"
+        r".{0,16}(?:合併|個體|個別)?(?:財務報告|財務報表|財報)"
+    ),
+)
+FORMAL_FINANCIAL_REPORT_KEYWORDS = (
+    "1月1日累計至本期止",
+    "財務報告或年度自結財務資訊報導期間",
+)
 FINANCIAL_SELF_REPORT_REQUIRED_KEYWORDS = ("自結",)
 FINANCIAL_SELF_REPORT_CONTEXT_KEYWORDS = (
     "財報",
@@ -58,9 +81,13 @@ FINANCIAL_SELF_REPORT_CONTEXT_KEYWORDS = (
 ATTENTION_TRADING_KEYWORDS = ("注意交易", "公布注意", "公佈注意", "達公布注意", "達公佈注意")
 FINANCIAL_BUSINESS_KEYWORDS = ("財務業務資訊", "財務業務", "財務、業務", "相關財務業務")
 SELF_PROFIT_KEYWORDS = ("損益", "營業損益", "稅前損益", "稅後損益", "合併損益", "淨利", "淨損")
+MONTHLY_SELF_PROFIT_KEYWORDS = SELF_PROFIT_KEYWORDS + ("盈餘", "獲利", "每股盈餘")
+MONTHLY_SELF_REVENUE_KEYWORDS = ("營收", "合併營收", "營收淨額", "營業收入", "合併營業收入", "月營收")
+SELF_REPORT_ACTION_KEYWORDS = ("自結", "自行結算", "自行結")
 FINANCIAL_SIGNAL_SELF_REPORT_EPS = "self_report_eps"
 FINANCIAL_SIGNAL_ATTENTION_EPS = "attention_financial_eps"
 FINANCIAL_SIGNAL_SELF_PROFIT_NO_EPS = "self_profit_without_eps"
+FINANCIAL_SIGNAL_MONTHLY_SELF_REVENUE = "monthly_self_revenue"
 PREVIOUS_DAY_HIDDEN_PATTERN = re.compile(r"^h(\d+)([0-8])$")
 PREVIOUS_DAY_FIELD_NAMES = {
     "0": "company_name",
@@ -373,8 +400,59 @@ def has_any_keyword(text: str, keywords: tuple[str, ...]) -> bool:
     return any(keyword.casefold() in normalized for keyword in keywords)
 
 
+def compact_text(value: str) -> str:
+    return re.sub(r"\s+", "", value)
+
+
+def subject_from_classification_text(text: str) -> str:
+    for line in text.splitlines():
+        line = line.strip()
+        if line:
+            return line
+    return ""
+
+
+def has_monthly_disclosure_period(subject: str) -> bool:
+    return bool(MONTHLY_DISCLOSURE_SUBJECT_PATTERN.search(compact_text(subject)))
+
+
+def is_formal_financial_report_text(text: str, subject: str = "") -> bool:
+    """Return True for formal quarterly financial-report announcements."""
+    haystack = compact_text("\n".join([subject, text]))
+    if not haystack:
+        return False
+    if any(keyword in haystack for keyword in FORMAL_FINANCIAL_REPORT_KEYWORDS):
+        return True
+    return any(pattern.search(haystack) for pattern in FORMAL_FINANCIAL_REPORT_PATTERNS)
+
+
+def is_monthly_self_profit_text(subject: str, text: str) -> bool:
+    """Return True for monthly self-reported profit/loss or earnings disclosures."""
+    if not has_monthly_disclosure_period(subject):
+        return False
+    return has_any_keyword(text, SELF_REPORT_ACTION_KEYWORDS) and has_any_keyword(
+        text,
+        MONTHLY_SELF_PROFIT_KEYWORDS,
+    )
+
+
+def is_monthly_self_revenue_text(subject: str, text: str) -> bool:
+    """Return True for monthly self-reported revenue disclosures."""
+    if not has_monthly_disclosure_period(subject):
+        return False
+    return has_any_keyword(text, SELF_REPORT_ACTION_KEYWORDS) and has_any_keyword(
+        text,
+        MONTHLY_SELF_REVENUE_KEYWORDS,
+    )
+
+
 def is_financial_self_report_text(text: str) -> bool:
     """Return True when text looks like self-reported financial results."""
+    subject = subject_from_classification_text(text)
+    if is_formal_financial_report_text(text, subject):
+        return False
+    if is_monthly_self_profit_text(subject, text) or is_monthly_self_revenue_text(subject, text):
+        return True
     normalized = text.casefold()
     return all(keyword in normalized for keyword in FINANCIAL_SELF_REPORT_REQUIRED_KEYWORDS) and any(
         keyword in normalized for keyword in FINANCIAL_SELF_REPORT_CONTEXT_KEYWORDS
@@ -394,20 +472,25 @@ def is_self_profit_text(text: str) -> bool:
 def recent_financial_signal_kind(record: dict[str, Any], text: str | None = None) -> str:
     """Classify records that should appear in the recent financial tab."""
     haystack = record_classification_text(record) if text is None else text
+    subject = str(record.get("subject") or subject_from_classification_text(haystack))
     is_attention_financial_business = is_attention_financial_business_text(haystack)
-    is_self_profit = is_self_profit_text(haystack)
-    if not (record.get("is_financial_self_report") or is_attention_financial_business or is_self_profit):
-        return ""
+    is_formal_financial_report = is_formal_financial_report_text(haystack, subject)
+    is_monthly_self_profit = is_monthly_self_profit_text(subject, haystack)
+    is_monthly_self_revenue = is_monthly_self_revenue_text(subject, haystack)
 
     metrics = get_or_extract_eps_metrics(record)
     has_eps = bool(metrics.get("has_eps"))
 
-    if record.get("is_financial_self_report") and has_eps:
-        return FINANCIAL_SIGNAL_SELF_REPORT_EPS
     if is_attention_financial_business and has_eps:
         return FINANCIAL_SIGNAL_ATTENTION_EPS
-    if is_self_profit and not has_eps:
+    if is_formal_financial_report:
+        return ""
+    if is_monthly_self_profit and has_eps:
+        return FINANCIAL_SIGNAL_SELF_REPORT_EPS
+    if is_monthly_self_profit and not has_eps:
         return FINANCIAL_SIGNAL_SELF_PROFIT_NO_EPS
+    if is_monthly_self_revenue:
+        return FINANCIAL_SIGNAL_MONTHLY_SELF_REVENUE
     return ""
 
 
@@ -424,14 +507,17 @@ def filter_records_for_recent_financial(records: list[dict[str, Any]]) -> list[d
 def classify_record(record: dict[str, Any]) -> dict[str, Any]:
     """Add category fields to a material-information record."""
     haystack = record_classification_text(record)
+    subject = str(record.get("subject") or subject_from_classification_text(haystack))
     is_financial_self_report = is_financial_self_report_text(haystack)
     category = CATEGORY_FINANCIAL_SELF_REPORT if is_financial_self_report else "other"
     record["category"] = category
     record["is_financial_self_report"] = is_financial_self_report
+    record["is_formal_financial_report"] = is_formal_financial_report_text(haystack, subject)
     signal_kind = recent_financial_signal_kind(record, haystack)
     record["financial_signal_kind"] = signal_kind
     record["is_attention_financial_eps"] = signal_kind == FINANCIAL_SIGNAL_ATTENTION_EPS
     record["is_self_profit_without_eps"] = signal_kind == FINANCIAL_SIGNAL_SELF_PROFIT_NO_EPS
+    record["is_monthly_self_revenue"] = signal_kind == FINANCIAL_SIGNAL_MONTHLY_SELF_REVENUE
     return record
 
 
