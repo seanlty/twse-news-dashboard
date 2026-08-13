@@ -60,6 +60,13 @@ Source priority:
 3. TPEX OpenAPI `https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap05_O` as OTC-company fallback.
 4. FinMind `TaiwanStockTradingDate` only for latest completed trading-day close classification.
 
+EPS estimate enrichment:
+
+- When `FINLAB_TOKEN` is set, monthly revenue updates enrich the displayed latest month with `EPS(估)`, `前季EPS`, and `EPS季增率(估)`.
+- FinLab inputs are cached in `TWSE_DASHBOARD_FINLAB_CACHE_FILE`, defaulting to `/data/raw/finlab_monthly_revenue_eps_inputs.pkl`.
+- Inputs: `monthly_revenue:當月營收`, `financial_statement:每股盈餘`, `financial_statement:股本`, `fundamental_features:稅後淨利率`, and `company_basic_info`.
+- `EPS(估)` uses `company_basic_info` field `普通股每股面額` as the share-denominator conversion instead of assuming a fixed NT$10 par value, so split or non-NT$10 par-value stocks do not get inflated by the old hardcoded multiplier.
+
 Primary cache:
 
 - `TWSE_DASHBOARD_MONTHLY_REVENUE_CACHE_FILE`

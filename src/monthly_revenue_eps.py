@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 import math
 import os
 import pickle
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,8 @@ DEFAULT_MONTHLY_REVENUE_DATASET = "monthly_revenue:當月營收"
 DEFAULT_EPS_DATASET = "financial_statement:每股盈餘"
 DEFAULT_CAPITAL_DATASET = "financial_statement:股本"
 DEFAULT_NET_MARGIN_DATASET = "fundamental_features:稅後淨利率"
+DEFAULT_PAR_VALUE_DATASET = "company_basic_info"
+PAR_VALUE_COLUMN = "普通股每股面額"
 EPS_ESTIMATE_FIELD_NAMES = (
     "estimated_eps",
     "previous_quarter_eps",
@@ -37,6 +40,7 @@ class FinlabMonthlyRevenueInputs:
     previous_eps: pd.DataFrame
     capital_billion: pd.DataFrame
     net_margin_percent: pd.DataFrame
+    par_value: pd.DataFrame
     fetched_at: str
 
 
@@ -52,6 +56,24 @@ def parse_float(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return number if math.isfinite(number) else None
+
+
+def extract_par_value(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    if str(value).strip() == "":
+        return None
+    text = str(value)
+    match = re.search(r"\d+\.\d{2}", text)
+    if match:
+        return parse_float(match.group(0))
+    match = re.search(r"\d+(?:\.\d+)?", text)
+    return parse_float(match.group(0)) if match else None
 
 
 def format_number(value: float | None, digits: int) -> str:
@@ -130,6 +152,16 @@ def plain_dataframe(frame: Any) -> pd.DataFrame:
     return result
 
 
+def company_par_value_frame(frame: Any) -> pd.DataFrame:
+    company_info = pd.DataFrame(frame).copy()
+    if "stock_id" not in company_info.columns or PAR_VALUE_COLUMN not in company_info.columns:
+        return pd.DataFrame(columns=[PAR_VALUE_COLUMN])
+    company_info["stock_id"] = company_info["stock_id"].astype(str).str.strip()
+    result = company_info.set_index("stock_id")[[PAR_VALUE_COLUMN]]
+    result[PAR_VALUE_COLUMN] = result[PAR_VALUE_COLUMN].apply(extract_par_value)
+    return result.groupby(level=0).last()
+
+
 def clear_eps_estimate_fields(record: dict[str, Any]) -> None:
     for field_name in EPS_ESTIMATE_FIELD_NAMES:
         record.pop(field_name, None)
@@ -160,6 +192,7 @@ def read_cached_finlab_inputs(path: Path) -> FinlabMonthlyRevenueInputs | None:
             previous_eps=payload["previous_eps"],
             capital_billion=payload["capital_billion"],
             net_margin_percent=payload["net_margin_percent"],
+            par_value=payload["par_value"],
             fetched_at=str(payload["fetched_at"]),
         )
     except KeyError:
@@ -185,6 +218,7 @@ def fetch_finlab_inputs(token: str) -> FinlabMonthlyRevenueInputs:
         previous_eps=plain_dataframe(data.get(DEFAULT_EPS_DATASET)),
         capital_billion=plain_dataframe(data.get(DEFAULT_CAPITAL_DATASET)) / 100000,
         net_margin_percent=plain_dataframe(data.get(DEFAULT_NET_MARGIN_DATASET)),
+        par_value=company_par_value_frame(data.get(DEFAULT_PAR_VALUE_DATASET)),
         fetched_at=current_utc_iso(),
     )
 
@@ -228,6 +262,7 @@ def load_finlab_inputs_with_cache(
                 "previous_eps": fresh_inputs.previous_eps,
                 "capital_billion": fresh_inputs.capital_billion,
                 "net_margin_percent": fresh_inputs.net_margin_percent,
+                "par_value": fresh_inputs.par_value,
                 "fetched_at": fresh_inputs.fetched_at,
             },
         )
@@ -322,6 +357,8 @@ def calculate_estimate_for_company(
         or company_id not in inputs.net_margin_percent.columns
     ):
         return None, "missing_financial_statement_column"
+    if PAR_VALUE_COLUMN not in inputs.par_value.columns or company_id not in inputs.par_value.index:
+        return None, "missing_par_value"
     if (
         previous_quarter not in inputs.previous_eps.index
         or previous_quarter not in inputs.capital_billion.index
@@ -332,19 +369,22 @@ def calculate_estimate_for_company(
     previous_eps = parse_float(inputs.previous_eps.at[previous_quarter, company_id])
     capital_billion = parse_float(inputs.capital_billion.at[previous_quarter, company_id])
     net_margin_percent = parse_float(inputs.net_margin_percent.at[previous_quarter, company_id])
+    par_value = parse_float(inputs.par_value.at[company_id, PAR_VALUE_COLUMN])
     if previous_eps is None:
         return None, "missing_previous_eps"
     if capital_billion in (None, 0):
         return None, "missing_or_zero_capital"
     if net_margin_percent is None:
         return None, "missing_net_margin"
+    if par_value in (None, 0):
+        return None, "missing_or_zero_par_value"
 
     known_month_count = len(revenue_values)
     ratio = 3 / known_month_count
     partial_quarter_revenue_billion = sum(revenue_values)
     estimated_quarter_revenue_billion = partial_quarter_revenue_billion * ratio
     net_margin_ratio = net_margin_percent / 100
-    estimated_eps = estimated_quarter_revenue_billion * net_margin_ratio / capital_billion * 10
+    estimated_eps = estimated_quarter_revenue_billion * net_margin_ratio / capital_billion * par_value
     estimated_qoq = None if previous_eps == 0 else (estimated_eps / previous_eps - 1) * 100
 
     return {
@@ -372,6 +412,9 @@ def calculate_estimate_for_company(
                 6,
             ),
             "previous_quarter_capital_billion": format_number(capital_billion, 4),
+            "par_value": format_number(par_value, 4),
+            "par_value_source": f"{DEFAULT_PAR_VALUE_DATASET}:{PAR_VALUE_COLUMN}",
+            "eps_denominator_method": "capital_billion_times_par_value",
         },
     }, "ok"
 
