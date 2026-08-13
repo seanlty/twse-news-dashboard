@@ -1921,6 +1921,11 @@ def render_financial_report_table(records: list[dict[str, Any]]) -> str:
         <span>{html.escape(display_quarter_label)} EPS &gt; 前季</span>
       </label>
       <label class="monthly-filter-field">
+        <span>當季EPS</span>
+        <span class="financial-filter-static-operator" aria-label="當季EPS大於等於">&gt;=</span>
+        <input class="monthly-filter-input" type="number" inputmode="decimal" step="0.01" data-financial-filter="currentEps" aria-label="當季EPS大於等於多少">
+      </label>
+      <label class="monthly-filter-field">
         <span>EPS成長率%</span>
         <span class="financial-filter-static-operator" aria-label="EPS成長率百分比大於等於">&gt;=</span>
         <input class="monthly-filter-input" type="number" inputmode="decimal" step="0.1" data-financial-filter="epsGrowthPct" aria-label="EPS成長率百分比大於等於多少">
@@ -3706,6 +3711,7 @@ def render_dashboard(
         }}
 
         const checkboxes = Array.from(bar.querySelectorAll("[data-financial-filter-check]"));
+        const currentEpsInput = bar.querySelector("[data-financial-filter='currentEps']");
         const epsGrowthInput = bar.querySelector("[data-financial-filter='epsGrowthPct']");
         const grossMarginGrowthInput = bar.querySelector("[data-financial-filter='grossMarginGrowthPct']");
         const nonOperatingInput = bar.querySelector("[data-financial-filter='nonOperatingPct']");
@@ -3718,6 +3724,7 @@ def render_dashboard(
 
         const hasActiveFilters = () => {{
           return checkboxes.some((checkbox) => checkbox.checked)
+            || parseFilterNumber(currentEpsInput?.value || "") !== null
             || parseFilterNumber(epsGrowthInput?.value || "") !== null
             || parseFilterNumber(grossMarginGrowthInput?.value || "") !== null
             || parseFilterNumber(nonOperatingInput?.value || "") !== null;
@@ -3743,6 +3750,13 @@ def render_dashboard(
             currentEps !== null
             && previousEps !== null
             && currentEps > previousEps
+          )) {{
+            return false;
+          }}
+          const currentEpsThreshold = parseFilterNumber(currentEpsInput?.value || "");
+          if (currentEpsThreshold !== null && !(
+            currentEps !== null
+            && currentEps >= currentEpsThreshold
           )) {{
             return false;
           }}
@@ -3820,6 +3834,7 @@ def render_dashboard(
         checkboxes.forEach((checkbox) => {{
           checkbox.addEventListener("change", applyFinancialFilters);
         }});
+        currentEpsInput?.addEventListener("input", applyFinancialFilters);
         epsGrowthInput?.addEventListener("input", applyFinancialFilters);
         grossMarginGrowthInput?.addEventListener("input", applyFinancialFilters);
         nonOperatingInput?.addEventListener("input", applyFinancialFilters);
@@ -3829,6 +3844,9 @@ def render_dashboard(
           }});
           if (nonOperatingInput) {{
             nonOperatingInput.value = "";
+          }}
+          if (currentEpsInput) {{
+            currentEpsInput.value = "";
           }}
           if (epsGrowthInput) {{
             epsGrowthInput.value = "";
