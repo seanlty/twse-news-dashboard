@@ -688,6 +688,15 @@ def select_display_financial_report_records(
     return dedupe_financial_report_records(sort_event_records(display_quarter_records))
 
 
+def financial_report_records_by_company_id(records: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    selected: dict[str, dict[str, Any]] = {}
+    for record in records:
+        company_id = str(record.get("company_id") or "").strip()
+        if company_id and company_id not in selected:
+            selected[company_id] = record
+    return selected
+
+
 def financial_report_company_count(records: list[dict[str, Any]]) -> int:
     company_ids = {str(record.get("company_id", "")).strip() for record in records}
     return len([company_id for company_id in company_ids if company_id])
@@ -1606,7 +1615,7 @@ def render_monthly_revenue_table(records: list[dict[str, Any]]) -> str:
         rows.append(
             f"""
             <tr class="eps-group-row">
-              <td colspan="11" data-section-label="{html.escape(section_title.rsplit('（', 1)[0], quote=True)}">{html.escape(section_title)}</td>
+              <td colspan="13" data-section-label="{html.escape(section_title.rsplit('（', 1)[0], quote=True)}">{html.escape(section_title)}</td>
             </tr>
             """
         )
@@ -1614,7 +1623,7 @@ def render_monthly_revenue_table(records: list[dict[str, Any]]) -> str:
             rows.append(
                 """
                 <tr class="eps-empty-row">
-                  <td colspan="11">目前沒有符合條件的公告。</td>
+                  <td colspan="13">目前沒有符合條件的公告。</td>
                 </tr>
                 """
             )
@@ -1629,10 +1638,14 @@ def render_monthly_revenue_table(records: list[dict[str, Any]]) -> str:
             estimated_eps = monthly_eps_estimate_value(record, "estimated_eps")
             previous_quarter_eps = monthly_eps_estimate_value(record, "previous_quarter_eps")
             estimated_eps_qoq = monthly_eps_estimate_value(record, "estimated_eps_qoq_percent")
+            current_gross_margin = record.get("financial_current_gross_margin_pct")
+            previous_gross_margin = record.get("financial_previous_gross_margin_pct")
             filter_attrs = "".join(
                 [
                     numeric_data_attr("revenue-millions", revenue_value, divisor=1000),
                     numeric_data_attr("eps-qoq", estimated_eps_qoq),
+                    numeric_data_attr("current-gross-margin", current_gross_margin),
+                    numeric_data_attr("previous-gross-margin", previous_gross_margin),
                     numeric_data_attr("mom", mom_value),
                     numeric_data_attr("yoy", yoy_value),
                     numeric_data_attr("ytd-yoy", ytd_yoy_value),
@@ -1648,6 +1661,8 @@ def render_monthly_revenue_table(records: list[dict[str, Any]]) -> str:
                   <td class="metric-cell" data-label="EPS(估)"{sort_value_attr(metric_sort_value(estimated_eps))}>{render_fixed_metric(estimated_eps)}</td>
                   <td class="metric-cell" data-label="前季EPS"{sort_value_attr(metric_sort_value(previous_quarter_eps))}>{render_fixed_metric(previous_quarter_eps)}</td>
                   <td data-label="EPS季增率(估)"{sort_value_attr(metric_sort_value(estimated_eps_qoq))}>{render_percent_value(estimated_eps_qoq)}</td>
+                  <td data-label="當季毛利率"{sort_value_attr(metric_sort_value(current_gross_margin))}>{render_percent_value(current_gross_margin)}</td>
+                  <td data-label="前季毛利率"{sort_value_attr(metric_sort_value(previous_gross_margin))}>{render_percent_value(previous_gross_margin)}</td>
                   <td data-label="MOM%"{sort_value_attr(metric_sort_value(mom_value))}>{render_percent_value(mom_value)}</td>
                   <td data-label="YOY%"{sort_value_attr(metric_sort_value(yoy_value))}>{render_percent_value(yoy_value)}</td>
                   <td data-label="累計YOY%"{sort_value_attr(metric_sort_value(ytd_yoy_value))}>{render_percent_value(ytd_yoy_value)}</td>
@@ -1665,6 +1680,8 @@ def render_monthly_revenue_table(records: list[dict[str, Any]]) -> str:
             ("EPS(估)", "number"),
             ("前季EPS", "number"),
             ("EPS季增率(估)", "number"),
+            ("當季毛利率", "number"),
+            ("前季毛利率", "number"),
             ("MOM%", "number"),
             ("YOY%", "number"),
             ("累計YOY%", "number"),
@@ -1682,6 +1699,10 @@ def render_monthly_revenue_table(records: list[dict[str, Any]]) -> str:
         <span>EPS季增率(估)</span>
         <button class="monthly-filter-operator" type="button" data-monthly-filter-operator data-operator="gt" aria-label="切換EPS季增率估算比較符號">&gt;</button>
         <input class="monthly-filter-input" type="number" inputmode="decimal" step="0.1" data-monthly-filter="epsQoq" aria-label="EPS季增率估算大於多少百分比">
+      </label>
+      <label class="monthly-filter-field financial-filter-check">
+        <input type="checkbox" data-monthly-filter-check="grossMarginAbovePrevious">
+        <span>當季毛利率 &gt;= 前季</span>
       </label>
       <label class="monthly-filter-field">
         <span>MOM%</span>
@@ -1740,6 +1761,36 @@ def single_financial_metric(record: dict[str, Any], single_key: str, raw_key: st
     if value in (None, "") and is_first_financial_report_quarter(record):
         value = financial_metric(record, raw_key)
     return value
+
+
+def enrich_monthly_records_with_financial_margins(
+    monthly_records: list[dict[str, Any]],
+    financial_records: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    financial_by_company_id = financial_report_records_by_company_id(financial_records)
+    enriched_records: list[dict[str, Any]] = []
+    for record in monthly_records:
+        enriched = dict(record)
+        enriched.pop("financial_report_quarter", None)
+        enriched.pop("financial_current_gross_margin_pct", None)
+        enriched.pop("financial_previous_gross_margin_pct", None)
+
+        financial_record = financial_by_company_id.get(str(record.get("company_id") or "").strip())
+        if financial_record is not None:
+            current_gross_margin = single_financial_metric(
+                financial_record,
+                "single_quarter_gross_margin_pct",
+                "gross_margin_pct",
+            )
+            previous_gross_margin = financial_record.get("previous_quarter_gross_margin_pct")
+            enriched["financial_report_quarter"] = financial_record.get("quarter", "")
+            if current_gross_margin not in (None, ""):
+                enriched["financial_current_gross_margin_pct"] = current_gross_margin
+            if previous_gross_margin not in (None, ""):
+                enriched["financial_previous_gross_margin_pct"] = previous_gross_margin
+
+        enriched_records.append(enriched)
+    return enriched_records
 
 
 def gross_margin_growth_rate_pct(current: Any, previous: Any) -> float | None:
@@ -3200,7 +3251,7 @@ def render_dashboard(
         display: table-row;
       }}
       .monthly-table {{
-        min-width: 1480px;
+        min-width: 1620px;
       }}
       .financial-table {{
         min-width: 1540px;
@@ -3284,29 +3335,29 @@ def render_dashboard(
       }}
       .monthly-table th:nth-child(1),
       .monthly-table td:nth-child(1) {{
-        width: 8%;
+        width: 7%;
       }}
       .monthly-table th:nth-child(2),
       .monthly-table td:nth-child(2) {{
-        width: 10%;
+        width: 9%;
       }}
       .monthly-table th:nth-child(3),
       .monthly-table td:nth-child(3) {{
-        width: 12%;
+        width: 11%;
       }}
       .monthly-table th:nth-child(4),
       .monthly-table td:nth-child(4) {{
-        width: 10%;
+        width: 9%;
       }}
       .monthly-table th:nth-child(5),
       .monthly-table td:nth-child(5),
       .monthly-table th:nth-child(6),
       .monthly-table td:nth-child(6) {{
-        width: 8%;
+        width: 7%;
       }}
       .monthly-table th:nth-child(7),
       .monthly-table td:nth-child(7) {{
-        width: 11%;
+        width: 9%;
       }}
       .monthly-table th:nth-child(8),
       .monthly-table td:nth-child(8),
@@ -3316,10 +3367,18 @@ def render_dashboard(
       }}
       .monthly-table th:nth-child(10),
       .monthly-table td:nth-child(10) {{
-        width: 10%;
+        width: 7%;
       }}
       .monthly-table th:nth-child(11),
       .monthly-table td:nth-child(11) {{
+        width: 7%;
+      }}
+      .monthly-table th:nth-child(12),
+      .monthly-table td:nth-child(12) {{
+        width: 11%;
+      }}
+      .monthly-table th:nth-child(13),
+      .monthly-table td:nth-child(13) {{
         display: none;
       }}
       .monthly-table .sort-indicator {{
@@ -3602,11 +3661,15 @@ def render_dashboard(
         }}
 
         const inputs = Array.from(bar.querySelectorAll("[data-monthly-filter]"));
+        const checkboxes = Array.from(bar.querySelectorAll("[data-monthly-filter-check]"));
         const operatorButtons = Array.from(bar.querySelectorAll("[data-monthly-filter-operator]"));
         const clearButton = bar.querySelector("[data-monthly-filter-clear]");
         const tbody = table.tBodies[0];
 
-        const hasActiveFilters = () => inputs.some((input) => parseFilterNumber(input.value) !== null);
+        const hasActiveFilters = () => (
+          inputs.some((input) => parseFilterNumber(input.value) !== null)
+          || checkboxes.some((checkbox) => checkbox.checked)
+        );
 
         const filterOperatorFor = (input) => {{
           const field = input.closest(".monthly-filter-field");
@@ -3624,7 +3687,7 @@ def render_dashboard(
         }};
 
         const rowMatchesFilters = (row) => {{
-          return inputs.every((input) => {{
+          const inputFiltersPass = inputs.every((input) => {{
             const threshold = parseFilterNumber(input.value);
             if (threshold === null) {{
               return true;
@@ -3633,6 +3696,21 @@ def render_dashboard(
             const rowValue = parseFilterNumber(row.dataset[key] || "");
             const operator = filterOperatorFor(input);
             return rowValue !== null && compareFilterValue(rowValue, threshold, operator);
+          }});
+          if (!inputFiltersPass) {{
+            return false;
+          }}
+
+          return checkboxes.every((checkbox) => {{
+            if (!checkbox.checked) {{
+              return true;
+            }}
+            if (checkbox.dataset.monthlyFilterCheck === "grossMarginAbovePrevious") {{
+              const current = parseFilterNumber(row.dataset.currentGrossMargin || "");
+              const previous = parseFilterNumber(row.dataset.previousGrossMargin || "");
+              return current !== null && previous !== null && current >= previous;
+            }}
+            return true;
           }});
         }};
 
@@ -3685,6 +3763,9 @@ def render_dashboard(
         inputs.forEach((input) => {{
           input.addEventListener("input", applyMonthlyFilters);
         }});
+        checkboxes.forEach((checkbox) => {{
+          checkbox.addEventListener("change", applyMonthlyFilters);
+        }});
         operatorButtons.forEach((button) => {{
           button.addEventListener("click", () => {{
             const currentIndex = filterOperators.findIndex((operator) => operator.key === button.dataset.operator);
@@ -3697,6 +3778,9 @@ def render_dashboard(
         clearButton?.addEventListener("click", () => {{
           inputs.forEach((input) => {{
             input.value = "";
+          }});
+          checkboxes.forEach((checkbox) => {{
+            checkbox.checked = false;
           }});
           applyMonthlyFilters();
         }});
@@ -4051,6 +4135,8 @@ class DashboardServer:
         source = source_record["source"]
         records = [record for record in records if is_monthly_revenue_record(record)]
         records = select_display_monthly_revenue_records(records)
+        financial_records, _ = self._get_financial_report_records()
+        records = enrich_monthly_records_with_financial_margins(records, financial_records)
         records = filter_monthly_records_by_company_id(records, search_query)
         return records, source
 

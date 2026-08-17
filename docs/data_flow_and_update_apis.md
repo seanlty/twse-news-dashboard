@@ -66,6 +66,7 @@ EPS estimate enrichment:
 - FinLab inputs are cached in `TWSE_DASHBOARD_FINLAB_CACHE_FILE`, defaulting to `/data/raw/finlab_monthly_revenue_eps_inputs.pkl`.
 - Inputs: `monthly_revenue:當月營收`, `financial_statement:每股盈餘`, `financial_statement:股本`, `fundamental_features:稅後淨利率`, and `company_basic_info`.
 - `EPS(估)` uses `company_basic_info` field `普通股每股面額` as the share-denominator conversion instead of assuming a fixed NT$10 par value, so split or non-NT$10 par-value stocks do not get inflated by the old hardcoded multiplier.
+- The monthly revenue page also joins the financial-report active cache at read time by `company_id` to display `當季毛利率` and `前季毛利率`. These display-only fields come from `/data/raw/financial_report_latest.json` and are not written back into `/data/raw/monthly_revenue_latest.json`.
 
 Primary cache:
 

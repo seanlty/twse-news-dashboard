@@ -435,12 +435,42 @@ def test_default_page_renders_material_info_tab(tmp_path: Path) -> None:
 
 def test_monthly_revenue_tab_renders_records(tmp_path: Path) -> None:
     monthly_cache = tmp_path / "monthly-cache.json"
+    financial_cache = tmp_path / "financial-report-cache.json"
+    save_records(
+        [
+            {
+                "source_type": "mops_material_financial_report",
+                "source_label": "重大訊息-財報",
+                "event_type": "financial_report",
+                "company_id": "4739",
+                "company_name": "康普",
+                "title": "本公司董事會通過115年第一季合併財務報告",
+                "subject": "本公司董事會通過115年第一季合併財務報告",
+                "quarter": "2026Q1",
+                "announced_at": "2026-05-14T17:30:33",
+                "event_time": "2026-05-14T17:30:33",
+                "detected_at": "2026-05-14T17:31:00+08:00",
+                "detail_payload": {"TYPEK": "sii"},
+                "single_quarter_gross_margin_pct": 18.5,
+                "previous_quarter_gross_margin_pct": 16.4,
+                "gross_margin_pct": 17.93,
+                "metrics": {
+                    "quarter": "2026Q1",
+                    "gross_margin_pct": 17.93,
+                },
+                "detail": {"description": FINANCIAL_REPORT_DETAIL},
+            }
+        ],
+        financial_cache,
+    )
     dashboard = make_dashboard(
         range_cache_file=tmp_path / "missing-cache.json",
         crawler=FailingCrawler(),
         monthly_revenue_crawler=FakeMonthlyRevenueCrawler(),
         monthly_revenue_output_path=monthly_cache,
         monthly_revenue_company_ids=["4739"],
+        financial_report_output_path=financial_cache,
+        financial_report_target_quarter="2026Q1",
     )
 
     html = fetch_dashboard_html(dashboard, f"/?tab={TAB_MONTHLY_REVENUE}")
@@ -455,14 +485,21 @@ def test_monthly_revenue_tab_renders_records(tmp_path: Path) -> None:
     assert 'data-sort-value="1.23400000"' in html
     assert 'data-sort-value="0.56700000"' in html
     assert "117.64%" in html
+    assert "當季毛利率" in html
+    assert "前季毛利率" in html
+    assert "18.50%" in html
+    assert "16.40%" in html
     assert "monthly-filter-bar" in html
     assert "monthly-filter-operator" in html
     assert 'data-monthly-filter-operator data-operator="gt"' in html
     assert 'data-monthly-filter="revenueMillions"' in html
     assert 'data-monthly-filter="epsQoq"' in html
     assert 'data-monthly-filter="ytdYoy"' in html
+    assert 'data-monthly-filter-check="grossMarginAbovePrevious"' in html
     assert 'data-revenue-millions="1026.88800000"' in html
     assert 'data-eps-qoq="117.64000000"' in html
+    assert 'data-current-gross-margin="18.50000000"' in html
+    assert 'data-previous-gross-margin="16.40000000"' in html
     assert 'data-mom="14.10000000"' in html
     assert 'data-yoy="96.24000000"' in html
     assert 'data-ytd-yoy="115.46000000"' in html
