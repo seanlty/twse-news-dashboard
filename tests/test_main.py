@@ -530,6 +530,89 @@ def test_monthly_revenue_tab_renders_records(tmp_path: Path) -> None:
     assert 'name="q"' in html
 
 
+def test_monthly_revenue_uses_financial_record_with_current_gross_margin(tmp_path: Path) -> None:
+    monthly_cache = tmp_path / "monthly-cache.json"
+    financial_cache = tmp_path / "financial-report-cache.json"
+    save_records(
+        [
+            {
+                "source_type": "mops_monthly_revenue_summary",
+                "source_label": "上櫃月營收彙總",
+                "event_type": "monthly_revenue",
+                "market": "otc",
+                "company_id": "5351",
+                "company_name": "鈺創",
+                "title": "5351 鈺創 115/08 月營收",
+                "detected_at": "2026-09-07T17:27:28+08:00",
+                "event_time": "2026-09-07T17:27:28+08:00",
+                "data_month": "115/08",
+                "monthly_revenue": "2125000",
+                "mom_percent": "12.34",
+                "yoy_percent": "591.00",
+                "ytd_yoy_percent": "210.00",
+            }
+        ],
+        monthly_cache,
+    )
+    save_records(
+        [
+            {
+                "source_type": "mops_material_financial_report",
+                "source_label": "重大訊息-財報",
+                "event_type": "financial_report",
+                "company_id": "5351",
+                "company_name": "鈺創",
+                "title": "本公司有價證券近期多次達公布注意交易資訊標準",
+                "subject": "本公司有價證券近期多次達公布注意交易資訊標準",
+                "quarter": "2026Q2",
+                "announced_at": "2026-08-13T21:00:00",
+                "event_time": "2026-08-13T21:00:00",
+                "detected_at": "2026-08-13T22:53:30+08:00",
+                "detail_payload": {"TYPEK": "otc"},
+                "single_quarter_gross_margin_pct": None,
+                "previous_quarter_gross_margin_pct": 36.65,
+                "single_quarter_eps": 0.44,
+                "detail": {"description": "注意交易資訊揭露單月與單季 EPS，未揭露營業毛利。"},
+            },
+            {
+                "source_type": "mops_material_financial_report",
+                "source_label": "重大訊息-財報",
+                "event_type": "financial_report",
+                "company_id": "5351",
+                "company_name": "鈺創",
+                "title": "公告本公司董事會通過115年度第二季財務報告",
+                "subject": "公告本公司董事會通過115年度第二季財務報告",
+                "quarter": "2026Q2",
+                "announced_at": "2026-08-02T21:00:00",
+                "event_time": "2026-08-02T21:00:00",
+                "detected_at": "2026-08-02T22:17:44+08:00",
+                "detail_payload": {"TYPEK": "otc"},
+                "single_quarter_gross_margin_pct": 52.16,
+                "previous_quarter_gross_margin_pct": 36.65,
+                "gross_margin_pct": 46.6,
+                "detail": {"description": "正式財報揭露營業收入與營業毛利。"},
+            },
+        ],
+        financial_cache,
+    )
+    dashboard = make_dashboard(
+        range_cache_file=tmp_path / "missing-cache.json",
+        crawler=FailingCrawler(),
+        monthly_revenue_output_path=monthly_cache,
+        financial_report_output_path=financial_cache,
+        financial_report_target_quarter="2026Q2",
+    )
+
+    html = fetch_dashboard_html(dashboard, f"/?tab={TAB_MONTHLY_REVENUE}&q=5351")
+
+    assert "5351" in html
+    assert "鈺創" in html
+    assert "52.16%" in html
+    assert "36.65%" in html
+    assert 'data-current-gross-margin="52.16000000"' in html
+    assert 'data-previous-gross-margin="36.65000000"' in html
+
+
 def test_monthly_revenue_tab_only_displays_latest_data_month_from_cache(tmp_path: Path) -> None:
     monthly_cache = tmp_path / "monthly-cache.json"
     save_records(

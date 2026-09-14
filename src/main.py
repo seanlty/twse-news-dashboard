@@ -692,9 +692,31 @@ def financial_report_records_by_company_id(records: list[dict[str, Any]]) -> dic
     selected: dict[str, dict[str, Any]] = {}
     for record in records:
         company_id = str(record.get("company_id") or "").strip()
-        if company_id and company_id not in selected:
+        if not company_id:
+            continue
+        existing = selected.get(company_id)
+        if existing is None or should_replace_financial_report_record_for_monthly_join(existing, record):
             selected[company_id] = record
     return selected
+
+
+def financial_report_has_current_gross_margin(record: dict[str, Any]) -> bool:
+    value = single_financial_metric(
+        record,
+        "single_quarter_gross_margin_pct",
+        "gross_margin_pct",
+    )
+    return value not in (None, "")
+
+
+def should_replace_financial_report_record_for_monthly_join(
+    existing: dict[str, Any],
+    candidate: dict[str, Any],
+) -> bool:
+    return (
+        financial_report_has_current_gross_margin(candidate)
+        and not financial_report_has_current_gross_margin(existing)
+    )
 
 
 def financial_report_company_count(records: list[dict[str, Any]]) -> int:
