@@ -115,6 +115,23 @@ The repo includes `.github/workflows/dashboard-update.yml` for GitHub Actions. G
 
 A host cron or external cron service can still be used as a backup. The dashboard server already has a 300 second cooldown on `/api/admin/update`, so accidental repeated calls should not immediately hammer MOPS.
 
+### Railway / Zeabur migration schedule (2026-10-24)
+
+Both dashboards update on the existing 07:00–23:00 Asia/Taipei schedule through **2026-11-30**, inclusive. Starting **2026-12-01**, scheduled runs target Railway only. This workflow does not delete or stop the Zeabur service; retain that page until the end of November and handle its retirement separately.
+
+Repository Actions secrets:
+
+| Target | Base URL secret | Update token secret |
+| --- | --- | --- |
+| Railway | `TWSE_RAILWAY_BASE_URL` | `TWSE_RAILWAY_UPDATE_TOKEN` |
+| Zeabur | `TWSE_DASHBOARD_BASE_URL` (existing) | `TWSE_DASHBOARD_UPDATE_TOKEN` (existing) |
+
+Each token must match `TWSE_DASHBOARD_UPDATE_TOKEN` on its own hosting platform. Use a separate token for Railway; keep credentials out of this repository and workflow logs.
+
+The two sites run as independent matrix jobs with `fail-fast: false`. Within each job, all three update endpoints are attempted even if one fails. The job summary shows each HTTP status and outcome; raw API response bodies are not printed. A 200 response must also contain `ok: true` to count as successful. Degraded source results are reported as warnings.
+
+For a manual check, run **Dashboard scheduled updates** with target `scheduled`, `railway`, `zeabur`, or `both`. Manual runs bypass the time-of-day gate; `scheduled` still follows the November 30 cutoff, while an explicit target overrides that cutoff for troubleshooting. GitHub scheduled execution is best-effort and can be delayed or skipped, especially under load; the five-minute cron is not a guaranteed five-minute refresh interval.
+
 ## Monthly Revenue Scheduler Memo
 
 When enabling the monthly revenue tab in production, keep the update flow separate from material information, self-profit, and financial report crawlers.
