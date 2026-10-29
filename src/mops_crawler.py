@@ -608,17 +608,21 @@ def sort_records_by_spoke_time(records: list[dict[str, Any]]) -> list[dict[str, 
     )
 
 
+def record_identity(record: dict[str, Any]) -> tuple[str, str, str, str]:
+    return (
+        str(record.get("company_id", "")),
+        str(record.get("spoke_date", "")),
+        normalize_time(str(record.get("spoke_time", ""))),
+        str(record.get("subject", "")),
+    )
+
+
 def dedupe_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Deduplicate records by stable MOPS row identity."""
     seen: set[tuple[str, str, str, str]] = set()
     unique_records: list[dict[str, Any]] = []
     for record in records:
-        key = (
-            str(record.get("company_id", "")),
-            str(record.get("spoke_date", "")),
-            normalize_time(str(record.get("spoke_time", ""))),
-            str(record.get("subject", "")),
-        )
+        key = record_identity(record)
         if key in seen:
             continue
         seen.add(key)
@@ -844,22 +848,132 @@ class MopsCrawler:
         )
         self._last_request_at = 0.0
 
-    def _request(self, method: str, path: str, **kwargs: Any) -> str:
-        elapsed = time.monotonic() - self._last_request_at
-        wait_seconds = self.request_interval_seconds - elapsed
-        if self._last_request_at and wait_seconds > 0:
-            time.sleep(wait_seconds)
+    def _request(
+        self, method: str, path: str, *, retries: int = 0,
+        deadline: float | None = None, **kwargs: Any,
+    ) -> str:
+        for attempt in range(retries + 1):
+            elapsed = time.monotonic() - self._last_request_at
+            wait_seconds = max(self.request_interval_seconds - elapsed, 0) if self._last_request_at else 0
+            if attempt:
+                wait_seconds = max(wait_seconds, 2 ** attempt)
+            if deadline is not None and time.monotonic() + wait_seconds >= deadline:
+                raise requests.Timeout("MOPS request budget exhausted")
+            if wait_seconds:
+                time.sleep(wait_seconds)
+            timeout = self.timeout_seconds
+            if deadline is not None:
+                # Reserve time for both connection and response, and never start
+                # another request after this market's budget has run out.
+                timeout = min(timeout, max((deadline - time.monotonic()) / 2, 0.01))
+            try:
+                response = self.session.request(
+                    method, urljoin(self.base_url, path), timeout=timeout, **kwargs,
+                )
+                response.raise_for_status()
+                response.encoding = "utf-8"
+                return response.text
+            except (requests.ConnectionError, requests.Timeout):
+                if attempt == retries:
+                    raise
+            except requests.HTTPError as exc:
+                status = exc.response.status_code if exc.response is not None else None
+                if status not in (429, 500, 502, 503, 504) or attempt == retries:
+                    raise
+            finally:
+                self._last_request_at = time.monotonic()
+        raise RuntimeError("MOPS request attempts exhausted")
 
-        response = self.session.request(
-            method,
-            urljoin(self.base_url, path),
-            timeout=self.timeout_seconds,
-            **kwargs,
-        )
-        self._last_request_at = time.monotonic()
-        response.raise_for_status()
-        response.encoding = "utf-8"
-        return response.text
+    def fetch_latest_incremental(
+        self, existing_records: list[dict[str, Any]], *, market: str,
+        max_items: int = 0, budget_seconds: float = 75,
+        detail_ttl_seconds: float = 3600,
+    ) -> dict[str, Any]:
+        """Reuse details, bound retries, and retain successes within one market.
+
+        Recheck unchanged details hourly because an issuer can amend the body
+        without changing the title. New announcements take priority over these
+        refreshes. A failed refresh never replaces an existing complete detail.
+        """
+        result: dict[str, Any] = {
+            "market": market, "summary_ok": False, "records": [], "errors": [],
+            "reused_details": 0, "fetched_details": 0, "pending_details": 0,
+        }
+        deadline = time.monotonic() + budget_seconds
+        try:
+            html = self._request(
+                "POST", AJAX_PATH, data={"TYPEK": market, "step": "0"},
+                retries=1, deadline=deadline,
+            )
+            soup = BeautifulSoup(html, "html.parser")
+            form = soup.find("form", attrs={"name": "fm_t05sr01_1"})
+            if form is None or form.find("table", class_="hasBorder") is None:
+                raise ValueError("Unrecognized MOPS list response")
+            summaries = sort_records_by_spoke_time(dedupe_records(parse_latest_list(html)))
+            if max_items > 0:
+                summaries = summaries[:max_items]
+            result["summary_ok"] = True
+        except (requests.RequestException, ValueError) as exc:
+            # Do not persist upstream URLs, headers, or response bodies in errors.
+            result["errors"].append(f"{market}: list {type(exc).__name__}")
+            return result
+
+        cached_by_id = {record_identity(row): row for row in existing_records}
+        now = datetime.now(TAIWAN_TZ)
+        pending = []
+        for summary in summaries:
+            cached = cached_by_id.get(record_identity(summary))
+            detail = cached.get("detail") if cached else None
+            if not isinstance(detail, dict) or not (detail.get("fields") or detail.get("description")):
+                cached = None
+            if cached and str((cached.get("detail_payload") or {}).get("SEQ_NO", "")) != str(summary["detail_payload"].get("SEQ_NO", "")):
+                cached = None
+            age = float("inf")
+            if cached:
+                try:
+                    stamp = datetime.fromisoformat(str(cached.get("detail_fetched_at") or cached.get("fetched_at")))
+                    if stamp.tzinfo is None:
+                        stamp = stamp.replace(tzinfo=TAIWAN_TZ)
+                    age = (now - stamp).total_seconds()
+                except (ValueError, TypeError):
+                    pass
+            if cached and 0 <= age < detail_ttl_seconds:
+                result["records"].append({**cached, **summary})
+                result["reused_details"] += 1
+            else:
+                pending.append((summary, cached))
+
+        pending.sort(key=lambda item: item[1] is not None)
+        consecutive_failures = 0
+        for index, (summary, cached) in enumerate(pending):
+            if consecutive_failures >= 2 or time.monotonic() >= deadline:
+                result["errors"].append(f"{market}: remaining details deferred")
+                result["pending_details"] += len(pending) - index
+                for deferred_summary, deferred_cache in pending[index:]:
+                    if deferred_cache:
+                        result["records"].append({**deferred_cache, **deferred_summary})
+                break
+            try:
+                detail = parse_detail(self._request(
+                    "POST", AJAX_PATH, data=summary["detail_payload"],
+                    retries=1, deadline=deadline,
+                ))
+                if not (detail.get("fields") or detail.get("description")):
+                    raise ValueError("Unrecognized MOPS detail response")
+                stamp = taiwan_now_iso()
+                result["records"].append(classify_record({
+                    **summary, "detail": detail, "fetched_at": stamp,
+                    "detail_fetched_at": stamp,
+                }))
+                result["fetched_details"] += 1
+                consecutive_failures = 0
+            except (requests.RequestException, ValueError) as exc:
+                result["errors"].append(f"{market}: detail {type(exc).__name__}")
+                result["pending_details"] += 1
+                consecutive_failures += 1
+                if cached:
+                    result["records"].append({**cached, **summary})
+        return result
 
     def fetch_latest_summaries(self, market: str = "all") -> list[dict[str, Any]]:
         """Fetch realtime material-information summaries for a market type."""

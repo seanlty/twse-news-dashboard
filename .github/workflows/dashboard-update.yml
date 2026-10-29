@@ -110,6 +110,11 @@ jobs:
                       outcome = "success (cooldown; recent update retained)"
                   failed = failed or not ok
                   print(f"{target}: {label}: HTTP {status}, {outcome}")
+                  if ok and label == "material info":
+                      counts = {key: payload.get(key) for key in
+                                ("fetched_details", "reused_details", "pending_details")}
+                      if all(type(value) is int and value >= 0 for value in counts.values()):
+                          print(f"{target}: material info detail counts: " + json.dumps(counts))
                   summary.write(f"| {label} | {status} | {outcome} |\n")
                   summary.flush()
           if failed:

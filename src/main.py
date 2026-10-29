@@ -1067,7 +1067,10 @@ def format_range_cache_source(cache_file: Path, records: list[dict[str, Any]]) -
         parts.append(f"最新更新：{latest_update}")
     if newest_spoke_at:
         parts.append(f"最新公告：{newest_spoke_at}")
-    if meta.get("last_error"):
+    if meta.get("update_status") == "partial":
+        partial_time = format_meta_time(meta.get("last_partial_success_at"))
+        parts.append(f"部分更新：{partial_time}（部分來源或詳情待補）")
+    elif meta.get("last_error"):
         parts.append("最近更新失敗")
     return " ｜ ".join(parts)
 
@@ -4530,16 +4533,18 @@ class DashboardServer:
             "updated_at": taiwan_now().strftime("%Y-%m-%d %H:%M:%S"),
         }
 
-    def _fetch_latest_listed_otc_records(self) -> list[dict[str, Any]]:
+    def _fetch_latest_listed_otc_records(
+        self, existing_records: list[dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         records: list[dict[str, Any]] = []
+        market_results = []
         for market in ("sii", "otc"):
-            records.extend(
-                self.crawler.fetch_latest_with_details(
-                    max_items=self.max_items,
-                    market=market,
-                )
+            result = self.crawler.fetch_latest_incremental(
+                existing_records, max_items=self.max_items, market=market,
             )
-        return sort_records_by_spoke_time(dedupe_records(records))
+            records.extend(result["records"])
+            market_results.append({key: value for key, value in result.items() if key != "records"})
+        return sort_records_by_spoke_time(dedupe_records(records)), market_results
 
     def update_latest_cache(self) -> dict[str, Any]:
         """Fetch realtime rows and merge them into the persistent range cache."""
@@ -4559,12 +4564,14 @@ class DashboardServer:
 
         cache_file = self.range_cache_file or find_range_cache_file() or default_range_output_path()
         update_started_at = taiwan_now_iso()
+        market_results: list[dict[str, Any]] = []
         try:
             existing_records = self._load_offline_records(cache_file) if cache_file.exists() else []
-            existing_records = enrich_records_for_cache(existing_records)
             before_count = len(dedupe_records(existing_records))
 
-            latest_records = self._fetch_latest_listed_otc_records()
+            latest_records, market_results = self._fetch_latest_listed_otc_records(existing_records)
+            if not any(result["summary_ok"] for result in market_results):
+                raise RuntimeError("MOPS listed and OTC lists unavailable; previous cache retained")
             latest_records = enrich_records_for_cache(latest_records)
             merged_records = sort_records_by_spoke_time(
                 dedupe_records([*latest_records, *existing_records])
@@ -4576,19 +4583,29 @@ class DashboardServer:
                 last_update_started_at=update_started_at,
                 last_update_failed_at=taiwan_now_iso(),
                 last_error=str(exc),
+                update_status="failed",
+                degraded=True,
+                market_results=market_results,
             )
             raise
 
         self.range_cache_file = cache_file
-        self.last_update_at = now
+        self.last_update_at = time.monotonic()
         self.cache_records.pop(MODE_RECENT_FINANCIAL, None)
         self.cache_at.pop(MODE_RECENT_FINANCIAL, None)
+        fetch_errors = [error for result in market_results for error in result["errors"]]
+        degraded = bool(fetch_errors)
+        completed_at = taiwan_now_iso()
+        success_field = "last_partial_success_at" if degraded else "last_success_at"
         meta = update_range_cache_meta(
             cache_file,
             merged_records,
             last_update_started_at=update_started_at,
-            last_success_at=taiwan_now_iso(),
-            last_error=None,
+            **{success_field: completed_at},
+            last_error="; ".join(fetch_errors) if degraded else None,
+            update_status="partial" if degraded else "complete",
+            degraded=degraded,
+            market_results=market_results,
             fetched_count=len(latest_records),
             before_count=before_count,
             after_count=len(merged_records),
@@ -4599,6 +4616,11 @@ class DashboardServer:
         result = {
             "ok": True,
             "skipped": False,
+            "degraded": degraded,
+            "market_results": market_results,
+            "fetched_details": sum(result["fetched_details"] for result in market_results),
+            "reused_details": sum(result["reused_details"] for result in market_results),
+            "pending_details": sum(result["pending_details"] for result in market_results),
             "source": "MOPS realtime endpoint (sii+otc)",
             "cache_file": str(cache_file),
             "meta_file": str(range_cache_meta_path(cache_file)),
@@ -4606,7 +4628,8 @@ class DashboardServer:
             "before_count": before_count,
             "after_count": len(merged_records),
             "new_count": max(len(merged_records) - before_count, 0),
-            "updated_at": meta.get("last_success_at", ""),
+            "updated_at": completed_at,
+            "last_complete_update_at": meta.get("last_success_at", ""),
             "newest_spoke_at": meta.get("newest_spoke_at", ""),
             "next_allowed_after_seconds": self.update_min_interval_seconds,
         }

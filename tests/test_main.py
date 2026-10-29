@@ -33,6 +33,13 @@ class FakeCrawler:
     def __init__(self) -> None:
         self.calls: list[dict] = []
 
+    def fetch_latest_incremental(self, existing_records, *, max_items=0, market):
+        return {
+            "market": market, "summary_ok": True,
+            "records": self.fetch_latest_with_details(max_items=max_items, market=market),
+            "errors": [], "fetched_details": 0, "reused_details": 0, "pending_details": 0,
+        }
+
     def fetch_latest_with_details(self, max_items: int = 0, market: str = "all") -> list[dict]:
         self.calls.append({"max_items": max_items, "market": market})
         records_by_market = {

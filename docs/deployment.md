@@ -131,6 +131,18 @@ All three Railway update endpoints are attempted even if one fails. The job summ
 
 For a manual check, run **Dashboard scheduled updates** without additional inputs. Manual runs bypass the time-of-day gate. GitHub scheduled execution is best-effort and can be delayed or skipped, especially under load; the five-minute cron is not a guaranteed five-minute refresh interval.
 
+### Material-information resilience and diagnostics
+
+The material-information updater queries the listed and OTC markets independently. Each market has a 75-second request budget; connection/read failures and HTTP 429/500/502/503/504 receive at most one retry, with a two-second delay. Two consecutive detail failures defer the remaining details until the next update. Request timeouts shrink as the budget is consumed; this is a request-start budget, not a hard process deadline.
+
+Complete announcement details are reused for one hour when company, announcement date/time, title, and sequence still match. New or changed announcements are fetched first; unchanged details are refreshed after one hour to catch corrections to the body. Historical cached records are retained without reclassifying the entire archive on every update.
+
+Successful records are atomically merged into the existing cache even if the other market or some details fail. Such responses have `degraded: true`, and the page shows `部分更新`; the last complete-update timestamp does not advance. If neither market's list is available, the endpoint fails and leaves the cache file unchanged. Failed or deferred details are retried on a later update. The normal five-minute cooldown also applies to partial updates.
+
+Actions logs include only numeric detail counts (`fetched_details`, `reused_details`, `pending_details`), HTTP status, and outcome. They never print full response bodies or credentials. Market metadata stores error types rather than upstream exception text.
+
+For a low-volume network comparison, manually run **MOPS connectivity diagnostic**. It sends the same credential-free list query once per market, with a 20-second timeout, and reports status, duration, and whether the expected form was returned. It does not fetch announcement details or write dashboard data. A successful diagnostic workflow means the probe ran; inspect its JSON results to determine whether MOPS responded successfully.
+
 ## Monthly Revenue Scheduler Memo
 
 When enabling the monthly revenue tab in production, keep the update flow separate from material information, self-profit, and financial report crawlers.
