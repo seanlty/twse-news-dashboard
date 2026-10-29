@@ -7,16 +7,6 @@ on:
     - cron: "*/5 0-14 * * *"
     - cron: "0 15 * * *"
   workflow_dispatch:
-    inputs:
-      target:
-        description: "Target (scheduled follows the Zeabur retirement date)"
-        type: choice
-        default: scheduled
-        options:
-          - scheduled
-          - railway
-          - zeabur
-          - both
 
 permissions: {}
 
@@ -26,73 +16,45 @@ concurrency:
 
 jobs:
   plan:
-    name: Select active dashboards
+    name: Check update window
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       should_run: ${{ steps.targets.outputs.should_run }}
-      matrix: ${{ steps.targets.outputs.matrix }}
     steps:
-      - name: Check Taipei monitoring window and migration date
+      - name: Check Taipei monitoring window
         id: targets
         shell: python
-        env:
-          REQUESTED_TARGET: ${{ inputs.target || 'scheduled' }}
         run: |
-          import json
           import os
-          from datetime import date, datetime, time
+          from datetime import datetime, time
           from zoneinfo import ZoneInfo
 
-          def choose_targets(now, manual, requested):
+          def should_update(now, manual):
               local_minute = now.time().replace(second=0, microsecond=0, tzinfo=None)
               in_window = time(7, 0) <= local_minute <= time(23, 0)
-              targets = ["railway"]
-              # Keep Zeabur updating through Nov 30, then use Railway only.
-              if now.date() <= date(2026, 11, 30):
-                  targets.append("zeabur")
-              if manual and requested != "scheduled":
-                  targets = ["railway", "zeabur"] if requested == "both" else [requested]
-              return manual or in_window, targets
+              return manual or in_window
 
           now = datetime.now(ZoneInfo("Asia/Taipei"))
-          should_run, targets = choose_targets(
+          should_run = should_update(
               now,
               os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch",
-              os.environ["REQUESTED_TARGET"],
           )
-          settings = {
-              "railway": {
-                  "target": "railway",
-                  "url_secret": "TWSE_RAILWAY_BASE_URL",
-                  "token_secret": "TWSE_RAILWAY_UPDATE_TOKEN",
-              },
-              "zeabur": {
-                  "target": "zeabur",
-                  "url_secret": "TWSE_DASHBOARD_BASE_URL",
-                  "token_secret": "TWSE_DASHBOARD_UPDATE_TOKEN",
-              },
-          }
-          matrix = {"include": [settings[target] for target in targets]}
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               output.write(f"should_run={str(should_run).lower()}\n")
-              output.write(f"matrix={json.dumps(matrix)}\n")
           print(f"taipei_now={now.isoformat(timespec='seconds')}")
-          print(f"should_run={should_run}; targets={','.join(targets)}")
+          print(f"should_run={should_run}; target=railway")
 
   update:
-    name: Update ${{ matrix.target }}
+    name: Update railway
     needs: plan
     if: needs.plan.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 35
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     env:
-      DASHBOARD_TARGET: ${{ matrix.target }}
-      DASHBOARD_BASE_URL: ${{ secrets[matrix.url_secret] }}
-      UPDATE_TOKEN: ${{ secrets[matrix.token_secret] }}
+      DASHBOARD_TARGET: railway
+      DASHBOARD_BASE_URL: ${{ secrets.TWSE_RAILWAY_BASE_URL }}
+      UPDATE_TOKEN: ${{ secrets.TWSE_RAILWAY_UPDATE_TOKEN }}
     steps:
       - name: Update all three caches and report results
         shell: python

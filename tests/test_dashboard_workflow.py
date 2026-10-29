@@ -23,23 +23,23 @@ def workflow_script(job):
     return textwrap.dedent('\n'.join(lines))
 
 
-@pytest.mark.parametrize('timestamp,manual,requested,run,targets', [
-    ('2026-11-30T06:59:59', False, 'scheduled', False, ['railway', 'zeabur']),
-    ('2026-11-30T07:00:00', False, 'scheduled', True, ['railway', 'zeabur']),
-    ('2026-11-30T23:00:00', False, 'scheduled', True, ['railway', 'zeabur']),
-    ('2026-11-30T23:00:59', False, 'scheduled', True, ['railway', 'zeabur']),
-    ('2026-11-30T23:01:00', False, 'scheduled', False, ['railway', 'zeabur']),
-    ('2026-12-01T07:00:00', False, 'scheduled', True, ['railway']),
-    ('2026-12-01T01:00:00', True, 'scheduled', True, ['railway']),
-    ('2026-12-01T01:00:00', True, 'both', True, ['railway', 'zeabur']),
-    ('2026-10-24T01:00:00', True, 'railway', True, ['railway']),
+@pytest.mark.parametrize('timestamp,manual,expected', [
+    ('2026-10-29T06:59:59', False, False),
+    ('2026-10-29T07:00:00', False, True),
+    ('2026-10-29T23:00:00', False, True),
+    ('2026-10-29T23:00:59', False, True),
+    ('2026-10-29T23:01:00', False, False),
+    ('2026-11-30T07:00:00', False, True),
+    ('2026-12-01T07:00:00', False, True),
+    ('2026-10-29T01:00:00', True, True),
+    ('2026-12-01T01:00:00', True, True),
 ])
-def test_schedule_boundaries(timestamp, manual, requested, run, targets):
+def test_schedule_boundaries(timestamp, manual, expected):
     tree = ast.parse(workflow_script('plan'))
     tree.body = [node for node in tree.body if isinstance(node, (ast.Import, ast.ImportFrom, ast.FunctionDef))]
     scope = {}
     exec(compile(tree, str(WORKFLOW), 'exec'), scope)
-    assert scope['choose_targets'](datetime.fromisoformat(timestamp), manual, requested) == (run, targets)
+    assert scope['should_update'](datetime.fromisoformat(timestamp), manual) is expected
 
 
 def run_update(monkeypatch, tmp_path, responses):
