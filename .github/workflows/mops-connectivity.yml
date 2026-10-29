@@ -1,0 +1,48 @@
+name: MOPS connectivity diagnostic
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Query each market once without credentials or cache writes
+        shell: python
+        run: |
+          import json
+          import time
+          from datetime import datetime, timezone
+          from urllib.error import HTTPError, URLError
+          from urllib.parse import urlencode
+          from urllib.request import Request, urlopen
+
+          for market in ("sii", "otc"):
+              request = Request(
+                  "https://mopsov.twse.com.tw/mops/web/ajax_t05sr01_1",
+                  data=urlencode({"TYPEK": market, "step": "0"}).encode(),
+                  headers={
+                      "User-Agent": "Mozilla/5.0 (compatible; twse-news-dashboard/0.1; +https://mopsov.twse.com.tw)",
+                      "Accept-Language": "zh-TW,zh;q=0.9,en;q=0.8",
+                  },
+              )
+              result = {"market": market, "at": datetime.now(timezone.utc).isoformat()}
+              started = time.monotonic()
+              try:
+                  with urlopen(request, timeout=20) as response:
+                      body = response.read(4_000_000)
+                      result.update(
+                          status=response.status, bytes=len(body),
+                          expected_form=b"fm_t05sr01_1" in body,
+                      )
+              except HTTPError as exc:
+                  result.update(status=exc.code, error="HTTPError")
+              except (URLError, TimeoutError, OSError) as exc:
+                  reason = getattr(exc, "reason", exc)
+                  result.update(error=type(reason).__name__)
+              result["elapsed_seconds"] = round(time.monotonic() - started, 2)
+              print(json.dumps(result), flush=True)
+              time.sleep(2)
